@@ -154,6 +154,27 @@ export function ConfigPanel() {
         />
       </label>
 
+      <label>
+        Logo offset · {Math.round(config.logoOffset * 100)}%
+        <input
+          type="range"
+          min={0}
+          max={2.5}
+          step={0.1}
+          value={config.logoOffset}
+          onChange={(e) => update({ logoOffset: Number(e.target.value) })}
+        />
+      </label>
+
+      <label className="config-check">
+        <input
+          type="checkbox"
+          checked={config.hideGround}
+          onChange={(e) => update({ hideGround: e.target.checked })}
+        />
+        Hide aircraft on the ground
+      </label>
+
       <p className="config-note">Live stream · server pushes updates ~1×/sec</p>
     </div>
   );

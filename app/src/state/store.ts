@@ -12,6 +12,8 @@ const DEFAULT_CONFIG: AirShowConfig = {
   refreshSeconds: 5,
   aircraftScale: 0.45,
   locationLabel: "DFW Area",
+  hideGround: false,
+  logoOffset: 1.0,
 };
 
 function loadConfig(): AirShowConfig {

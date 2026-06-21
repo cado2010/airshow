@@ -27,4 +27,8 @@ export interface AirShowConfig {
   aircraftScale: number;
   /** Human-readable label for the current center (preset name, city, Custom). */
   locationLabel: string;
+  /** Hide aircraft reported as on the ground. */
+  hideGround: boolean;
+  /** Logo offset from the aircraft center, as a multiple of its size. */
+  logoOffset: number;
 }

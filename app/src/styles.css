@@ -147,6 +147,18 @@ body,
   color: rgba(150, 220, 180, 0.55);
 }
 
+.config-panel label.config-check {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+}
+
+.config-panel label.config-check input {
+  width: auto;
+  margin: 0;
+}
+
 .config-panel input,
 .config-panel select {
   background: rgba(0, 0, 0, 0.4);

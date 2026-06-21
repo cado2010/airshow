@@ -1,6 +1,8 @@
 type Manifest = Record<string, string>; // ICAO -> "svg" | "png"
+type NameMap = Record<string, string>; // ICAO -> airline name
 
 let manifest: Manifest = {};
+let names: NameMap = {};
 let manifestLoaded = false;
 const imageCache = new Map<string, HTMLImageElement | null>();
 
@@ -12,7 +14,19 @@ export async function loadLogoManifest(): Promise<void> {
   } catch {
     /* logos simply won't render */
   }
+  try {
+    const res = await fetch("/logos/airlines-names.json");
+    if (res.ok) names = await res.json();
+  } catch {
+    /* names simply won't show */
+  }
   manifestLoaded = true;
+}
+
+/** Human-readable airline name for an operator ICAO, when known. */
+export function airlineName(operator?: string): string | undefined {
+  if (!operator) return undefined;
+  return names[operator];
 }
 
 /**

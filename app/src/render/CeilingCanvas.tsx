@@ -9,6 +9,7 @@ import {
   getLogo,
   logoReady,
   operatorIcao,
+  airlineName,
   loadLogoManifest,
 } from "../identity/airlines";
 import type { AirShowConfig } from "../types";
@@ -133,7 +134,9 @@ export function CeilingCanvas() {
       const tracks = tmRef.current.frame(now);
       const plotted: Plotted[] = [];
 
+      const cfg = configRef.current;
       for (const track of tracks) {
+        if (cfg.hideGround && track.data.onGround) continue;
         const r = track.render;
         const pt = project(r.lat, r.lon);
         if (pt.x < -60 || pt.x > vp.width + 60 || pt.y < -60 || pt.y > vp.height + 60) {
@@ -142,7 +145,7 @@ export function CeilingCanvas() {
         const cls = classOf(track.data.typeCode);
         const operator = operatorIcao(track.data.callsign);
         const color = colorFor(cls, operator);
-        const size = sizeForAlt(r.altFt) * configRef.current.aircraftScale;
+        const size = sizeForAlt(r.altFt) * cfg.aircraftScale;
         const alpha = alphaForAlt(r.altFt);
 
         drawTrail(ctx, track, project, color);
@@ -156,7 +159,7 @@ export function CeilingCanvas() {
         drawSilhouette(ctx, cls, size, color);
         ctx.restore();
 
-        drawLogo(ctx, operator, pt, size);
+        drawLogo(ctx, operator, pt, size, cfg.logoOffset);
         if (track.isNew) drawSpotterPulse(ctx, track, pt, size, now);
 
         plotted.push({ track, pt, size, cls, operator });
@@ -242,13 +245,15 @@ function drawLogo(
   operator: string | undefined,
   pt: ScreenPoint,
   size: number,
+  offset: number,
 ): void {
   const img = getLogo(operator);
   if (!logoReady(img)) return;
   const w = Math.max(10, Math.min(30, size * 0.6));
   const h = (img.naturalHeight / img.naturalWidth) * w;
+  const dy = offset * size;
   ctx.globalAlpha = 0.95;
-  ctx.drawImage(img, pt.x - w / 2, pt.y - h / 2, w, h);
+  ctx.drawImage(img, pt.x - w / 2, pt.y + dy - h / 2, w, h);
   ctx.globalAlpha = 1;
 }
 
@@ -369,9 +374,13 @@ function drawHover(
     !a.onGround && Math.abs(vrate) >= 100
       ? ` (${vrate > 0 ? "+" : ""}${Math.round(vrate)} fpm)`
       : "";
+  const airline = airlineName(operator);
+  const operatorLine = airline
+    ? `${airline} · ${CLASS_META[cls].label}`
+    : `${operator ?? "—"} · ${CLASS_META[cls].label}`;
   const lines = [
     a.callsign || a.hex.toUpperCase(),
-    `${operator ?? "—"} · ${CLASS_META[cls].label}`,
+    operatorLine,
     `Intent: ${intent}${vrTxt}`,
     a.typeCode ? `Type ${a.typeCode}` : "Type ?",
     a.onGround ? "On ground" : `${Math.round(track.render.altFt).toLocaleString()} ft`,
