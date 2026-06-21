@@ -5,9 +5,25 @@ import type { AirShowConfig } from "../types";
 const PRESETS: Record<string, { centerLat: number; centerLon: number }> = {
   "DFW Area": { centerLat: 33.1976, centerLon: -96.6153 },
   "DFW Airport": { centerLat: 32.8998, centerLon: -97.0403 },
-  Heathrow: { centerLat: 51.47, centerLon: -0.4543 },
-  JFK: { centerLat: 40.6413, centerLon: -73.7781 },
-  Bangalore: { centerLat: 13.1986, centerLon: 77.7066 },
+  "JFK (New York)": { centerLat: 40.6413, centerLon: -73.7781 },
+  // Europe
+  "Heathrow (London)": { centerLat: 51.47, centerLon: -0.4543 },
+  "Charles de Gaulle (Paris)": { centerLat: 49.0097, centerLon: 2.5479 },
+  "Frankfurt": { centerLat: 50.0379, centerLon: 8.5622 },
+  "Amsterdam Schiphol": { centerLat: 52.3105, centerLon: 4.7683 },
+  "Istanbul": { centerLat: 41.2753, centerLon: 28.7519 },
+  // Middle East
+  "Dubai (DXB)": { centerLat: 25.2532, centerLon: 55.3657 },
+  "Doha (Hamad)": { centerLat: 25.2731, centerLon: 51.608 },
+  "Abu Dhabi (AUH)": { centerLat: 24.433, centerLon: 54.6511 },
+  // Asia
+  "Chennai (MAA)": { centerLat: 12.99, centerLon: 80.1693 },
+  "Bangalore (BLR)": { centerLat: 13.1986, centerLon: 77.7066 },
+  "Delhi (DEL)": { centerLat: 28.5562, centerLon: 77.1 },
+  "Mumbai (BOM)": { centerLat: 19.0896, centerLon: 72.8656 },
+  "Singapore Changi": { centerLat: 1.3592, centerLon: 103.9894 },
+  "Hong Kong (HKG)": { centerLat: 22.308, centerLon: 113.9185 },
+  "Tokyo Haneda": { centerLat: 35.5494, centerLon: 139.7798 },
 };
 
 export function ConfigPanel() {
