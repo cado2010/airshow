@@ -8,13 +8,13 @@ const STORAGE_KEY = "airshow.config";
 const DEFAULT_CONFIG: AirShowConfig = {
   centerLat: 33.1976,
   centerLon: -96.6153,
-  radiusMiles: 50,
+  radiusMiles: 30,
   refreshSeconds: 5,
-  aircraftScale: 0.45,
+  aircraftScale: 0.3,
   locationLabel: "DFW Area",
-  hideGround: false,
-  logoOffset: 1.0,
-  routeCityNames: false,
+  hideGround: true,
+  logoOffset: 0.8,
+  routeCityNames: true,
 };
 
 function loadConfig(): AirShowConfig {
