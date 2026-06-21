@@ -181,7 +181,7 @@ export function CeilingCanvas() {
         drawSilhouette(ctx, cls, size, color);
         ctx.restore();
 
-        drawLogo(ctx, operator, pt, size, cfg.logoOffset);
+        drawLogo(ctx, operator, pt, size, cfg.logoOffset, cfg.logoScale);
         if (track.isNew) drawSpotterPulse(ctx, track, pt, size, now);
 
         plotted.push({ track, pt, size, cls, operator });
@@ -276,10 +276,11 @@ function drawLogo(
   pt: ScreenPoint,
   size: number,
   offset: number,
+  scale: number,
 ): void {
   const img = getLogo(operator);
   if (!logoReady(img)) return;
-  const w = Math.max(10, Math.min(30, size * 0.6));
+  const w = Math.max(10, Math.min(30, size * 0.6)) * scale;
   const h = (img.naturalHeight / img.naturalWidth) * w;
   const dy = offset * size;
   ctx.globalAlpha = 0.95;

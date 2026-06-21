@@ -14,6 +14,7 @@ const DEFAULT_CONFIG: AirShowConfig = {
   locationLabel: "DFW Area",
   hideGround: true,
   logoOffset: 0.8,
+  logoScale: 1.0,
   routeCityNames: true,
 };
 

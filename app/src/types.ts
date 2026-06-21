@@ -31,6 +31,8 @@ export interface AirShowConfig {
   hideGround: boolean;
   /** Logo offset from the aircraft center, as a multiple of its size. */
   logoOffset: number;
+  /** Multiplier applied to the rendered airline logo size. */
+  logoScale: number;
   /** Show city names instead of airport codes in the route line. */
   routeCityNames: boolean;
 }

@@ -182,6 +182,18 @@ export function ConfigPanel() {
         />
       </label>
 
+      <label>
+        Logo size · {Math.round(config.logoScale * 100)}%
+        <input
+          type="range"
+          min={0.4}
+          max={2.5}
+          step={0.1}
+          value={config.logoScale}
+          onChange={(e) => update({ logoScale: Number(e.target.value) })}
+        />
+      </label>
+
       <label className="config-check">
         <input
           type="checkbox"
