@@ -130,12 +130,143 @@ Time controls/replay UI; Projector mode (P: fullscreen/hide UI+cursor); audio (o
 
 *Milestone: meets all 8 success criteria.*
 
+### Phase 6 — Mobile apps (Android + iOS)
+
+> Status: **design only** (this section). No code yet. Goal: ship native
+> **Android** and **iPhone** apps that deliver the Ceiling Mode experience on a
+> phone/tablet, reusing as much of the existing web app as possible.
+
+#### 6.0 Where we're starting from
+
+Today the product is three pieces in one repo:
+
+- `app/` — React 18 + TS + Vite SPA, **Canvas 2D** renderer (`CeilingCanvas`),
+  Zustand state, an **SSE** client (`useStream`) with a stall watchdog.
+- `server/` — Node/Express proxy: 3-provider ADS-B failover, caching/throttle,
+  **SSE fan-out** (`/api/stream`), route lookup (`/api/route`), IP geolocation
+  fallback (`/api/geolocate`).
+- `electron/` — desktop shell that boots the server in-process and loads the
+  SPA same-origin.
+
+The mobile phase is mostly about **(a) where the server runs** and **(b) what
+shell wraps the UI**. The rendering/feel logic (projection, smoothing,
+silhouettes, trails, intent) is portable and should not be rewritten.
+
+#### 6.1 Key architecture decision — back end goes hosted
+
+On desktop the Node server runs locally inside Electron. Phones **cannot** run a
+persistent Node sidecar cleanly (iOS forbids long-lived background servers;
+`nodejs-mobile` is heavy/fragile), and we do **not** want thousands of mobile
+clients each hammering the public ADS-B providers (rate limits / acceptable
+use). So:
+
+- **Promote `server/` to a single hosted backend** (e.g. Fly.io / Render /
+  Railway / a small VPS) reachable over **HTTPS + SSE**. One server polls the
+  providers and fans out deltas to all clients — exactly what `StreamHub`
+  already does. The corporate-TLS `undici` workarounds become server-side only
+  and disappear from clients.
+- Clients (mobile **and** web) point at `https://api.<domain>` instead of
+  `localhost`. The SPA already centralizes this in the `VITE_SSE_BASE` /
+  relative-URL logic, so it's a config change, not a rearchitecture.
+- Keep Electron's embedded-server mode as-is for the offline desktop build; add
+  a build flag to target the hosted backend instead when desired.
+
+New backend concerns to add: TLS/domain, basic rate limiting & abuse
+protection per client/IP, CORS allow-list, horizontal-scale friendliness of the
+SSE hub (sticky sessions or a shared pub/sub if we scale past one node),
+uptime/logging.
+
+#### 6.2 Shell strategy — two options
+
+**Option A (recommended): Capacitor WebView wrapper.**
+Wrap the *existing* React/Canvas SPA in a native [Capacitor](https://capacitorjs.com)
+shell for Android (Gradle/APK/AAB) and iOS (Xcode/IPA). The web app runs almost
+unchanged inside a system WebView; native capabilities come from Capacitor
+plugins (Geolocation, StatusBar, SplashScreen, App lifecycle, Network, Browser
+for external links). **Highest code reuse, fastest path, one codebase for web +
+desktop + mobile.** Tradeoff: WebView Canvas perf is good for our scale (tens of
+aircraft) but not as fast as fully native; 3D mode (Phase 4) would be the
+stress test.
+
+**Option B (alternative): React Native (+ Expo).**
+More "native" feel and better long-term perf, reuses TS logic/state, but the
+Canvas renderer must be **ported** to `@shopify/react-native-skia` (or
+`expo-gl`/WebGL). That's a real rendering rewrite. Choose this only if WebView
+performance proves insufficient or a deeply native UX is required.
+
+Decision: **start with Capacitor (Option A)**; revisit RN only if profiling
+demands it.
+
+#### 6.3 What must change for touch / mobile (UI & UX)
+
+The current UI assumes a mouse and a large window. Mobile needs a touch-first
+pass (web app changes that also benefit the desktop build):
+
+- **Interaction:** replace hover popups with **tap-to-select** + a dismissible
+  detail card/bottom-sheet; add **pinch-to-zoom** and **drag-to-pan** of the
+  map (currently fixed scale); larger hit targets for small aircraft.
+- **Layout:** responsive config as a **bottom sheet/drawer** instead of the
+  top-right panel; respect **safe-area insets** (notch/Dynamic Island, home
+  indicator); support **portrait and landscape**.
+- **Rendering:** keep the DPR cap, but tune for high-density phone screens and
+  smaller GPUs; verify trail batching cost on mid-range Android.
+- **Lifecycle:** on background/resume, **pause and cleanly reconnect** SSE
+  (mobile OSes suspend timers/sockets); show the existing live/stalled status.
+- **Location:** use the native Geolocation plugin (foreground only) with the
+  IP fallback; handle permission prompts/denials gracefully.
+- **Battery/data:** an explicit "reduce updates when backgrounded / on cellular"
+  setting; the stream is light but the screen + canvas redraw are the cost.
+
+#### 6.4 Platform specifics
+
+**Android**
+- Build via Capacitor → Android Studio/Gradle → **APK** (sideload) and **AAB**
+  (Play). `minSdk` ~24+.
+- `AndroidManifest`: `INTERNET`, `ACCESS_FINE/COARSE_LOCATION`; cleartext off
+  (HTTPS only).
+- Adaptive launcher icon + splash generated from the existing
+  `assets/airshow-icon.png`.
+- Distribution: **Google Play Console** ($25 one-time), or direct APK for
+  side-loading/testing.
+
+**iOS (iPhone)**
+- Requires a **Mac + Xcode** to build/sign (cannot be produced from this
+  Windows dev box); Capacitor → Xcode → **IPA**.
+- `Info.plist`: `NSLocationWhenInUseUsageDescription`, ATS (HTTPS) compliance.
+- App icon set + launch screen from the existing icon art.
+- Distribution: **Apple Developer Program** ($99/yr), TestFlight for beta,
+  **App Review** for the Store (expect content/usage questions; live-data apps
+  are fine but review adds calendar time).
+
+#### 6.5 Suggested sub-sequence
+
+1. **Backend hosting**: deploy `server/` publicly (HTTPS, CORS allow-list, rate
+   limiting), make the SPA's API base fully configurable.
+2. **Responsive/touch web pass**: tap-select, bottom-sheet config, pan/zoom,
+   safe-area, lifecycle reconnect — verified in a mobile browser first.
+3. **Capacitor integration**: add Android + iOS projects, wire Geolocation /
+   StatusBar / SplashScreen / App plugins, generate icons & splash.
+4. **Android build & internal testing** (APK/Play internal track).
+5. **iOS build on a Mac** (TestFlight) — gated on Apple account + Mac.
+6. **Store submissions** (Play + App Store), privacy labels, screenshots.
+
+#### 6.6 What this does *not* require
+
+- No rewrite of the projection/smoothing/identity/render logic (reused as-is in
+  Option A).
+- No change to the ADS-B providers or the normalization/SSE design.
+- Electron desktop continues to work unchanged.
+
 ## Risks tracked (and mitigations)
 
 - **CORS / endpoint flakiness** → the proxy + 3-provider failover + last-good cache.
 - **Logo licensing / coverage gaps** → local download (no hotlinking), generic fallback, monochrome tail-color generation when a logo is missing.
 - **3D model sourcing** → V1 needs quality shaded per-class GLBs (PBR + lighting + shadows); the work is sourcing/vetting license-clean (CC0/CC-BY) models and optimizing them (draco/meshopt compression, LOD) so 200+ render at 60fps. Per-type (individual aircraft) models deferred (spec scopes V1 to classes).
 - **"Magical" is subjective** → smoothing + the altitude-never-disappears floor + spotter/fly-by life are the levers; tune against the real sky.
+- **Mobile — provider load & abuse (Phase 6)** → never let mobile clients hit ADS-B providers directly; the single hosted backend polls once and fans out via SSE, with per-client rate limiting and a CORS allow-list.
+- **Mobile — WebView render perf (Phase 6)** → validate Canvas 2D in a WebView on mid-range Android early; if 3D (Phase 4) is too heavy, gate it on capability or port hot paths to Skia/WebGL (Option B) only if needed.
+- **Mobile — background suspension (Phase 6)** → phones suspend sockets/timers; reuse the SSE stall watchdog to pause on background and reconnect on resume; add a cellular/background "reduce updates" setting.
+- **iOS toolchain & store gating (Phase 6)** → iOS builds need a Mac + Xcode and a paid Apple Developer account; App Review adds calendar time. Plan accounts/hardware before committing to dates; Android can ship first.
 
 ## Resolved confirmations
 
