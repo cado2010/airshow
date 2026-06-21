@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef } from "react";
 import { useStore } from "../state/store";
 import { PlanarProjection, type Viewport, type ScreenPoint } from "../geo/projection";
-import { milesToMeters, toLocalMeters } from "../geo/geo";
+import { milesToMeters } from "../geo/geo";
 import { TrackManager, type Track } from "../motion/track";
 import { classifyType, colorFor, CLASS_META, type AircraftClass } from "../identity/types";
 import { drawSilhouette } from "./silhouettes";
@@ -17,6 +17,7 @@ import type { AirShowConfig } from "../types";
 
 const OVERLAY = "rgba(120, 200, 160, 0.16)";
 const OVERLAY_TEXT = "rgba(150, 220, 180, 0.55)";
+const M_PER_DEG_LAT = 111_132;
 
 interface Plotted {
   track: Track;
@@ -115,7 +116,10 @@ export function CeilingCanvas() {
     let vp: Viewport = { width: 0, height: 0 };
 
     const resize = () => {
-      const dpr = window.devicePixelRatio || 1;
+      // Cap DPR: on HiDPI/large windows a full backing store tanks the frame
+      // rate (and thus makes interpolated motion look laggy) for little visual
+      // gain on this dark, line-art scene.
+      const dpr = Math.min(window.devicePixelRatio || 1, 1.5);
       const rect = canvas.getBoundingClientRect();
       vp = { width: rect.width, height: rect.height };
       canvas.width = Math.round(rect.width * dpr);
@@ -126,16 +130,6 @@ export function CeilingCanvas() {
     const ro = new ResizeObserver(resize);
     ro.observe(canvas);
 
-    const project = (lat: number, lon: number): ScreenPoint => {
-      const { east, north } = toLocalMeters(
-        lat,
-        lon,
-        configRef.current.centerLat,
-        configRef.current.centerLon,
-      );
-      return projection.project(east, north, vp);
-    };
-
     const draw = () => {
       const now = Date.now();
       ctx.clearRect(0, 0, vp.width, vp.height);
@@ -144,10 +138,25 @@ export function CeilingCanvas() {
 
       drawRadarOverlay(ctx, projection, vp, configRef.current);
 
+      const cfg = configRef.current;
+      // Precompute the (planar/equirectangular) projection once per frame so the
+      // per-point hot path is pure arithmetic with no allocations or trig.
+      const s = projection.metersToPixels(1, vp);
+      const cx = vp.width / 2;
+      const cy = vp.height / 2;
+      const mPerDegLon = M_PER_DEG_LAT * Math.cos((cfg.centerLat * Math.PI) / 180);
+      const px = (_lat: number, lon: number): number =>
+        cx + (lon - cfg.centerLon) * mPerDegLon * s;
+      const py = (lat: number, _lon: number): number =>
+        cy - (lat - cfg.centerLat) * M_PER_DEG_LAT * s;
+      const project = (lat: number, lon: number): ScreenPoint => ({
+        x: px(lat, lon),
+        y: py(lat, lon),
+      });
+
       const tracks = tmRef.current.frame(now);
       const plotted: Plotted[] = [];
 
-      const cfg = configRef.current;
       for (const track of tracks) {
         if (cfg.hideGround && track.data.onGround) continue;
         const r = track.render;
@@ -161,8 +170,8 @@ export function CeilingCanvas() {
         const size = sizeForAlt(r.altFt) * cfg.aircraftScale;
         const alpha = alphaForAlt(r.altFt);
 
-        drawTrail(ctx, track, project, color);
-        if (r.altFt > 30000) drawContrail(ctx, track, project);
+        drawTrail(ctx, track, px, py, color);
+        if (r.altFt > 30000) drawContrail(ctx, track, px, py);
 
         // Silhouette (rotated to heading)
         ctx.save();
@@ -206,23 +215,32 @@ export function CeilingCanvas() {
   );
 }
 
+// Trail fade is approximated with a few contiguous alpha bands instead of one
+// stroke per segment, cutting draw calls from ~N to TRAIL_BANDS per aircraft.
+const TRAIL_BANDS = 4;
+
 function drawTrail(
   ctx: CanvasRenderingContext2D,
   track: Track,
-  project: (lat: number, lon: number) => ScreenPoint,
+  px: (lat: number, lon: number) => number,
+  py: (lat: number, lon: number) => number,
   color: string,
 ): void {
   const pts = track.trail;
-  if (pts.length < 2) return;
+  const n = pts.length;
+  if (n < 2) return;
   ctx.lineWidth = 1.6;
   ctx.strokeStyle = color;
-  for (let i = 1; i < pts.length; i++) {
-    const a = project(pts[i - 1].lat, pts[i - 1].lon);
-    const b = project(pts[i].lat, pts[i].lon);
-    ctx.globalAlpha = (i / pts.length) * 0.45;
+  for (let b = 0; b < TRAIL_BANDS; b++) {
+    const lo = Math.floor((b / TRAIL_BANDS) * (n - 1));
+    const hi = Math.floor(((b + 1) / TRAIL_BANDS) * (n - 1));
+    if (hi <= lo) continue;
+    ctx.globalAlpha = ((b + 1) / TRAIL_BANDS) * 0.45;
     ctx.beginPath();
-    ctx.moveTo(a.x, a.y);
-    ctx.lineTo(b.x, b.y);
+    ctx.moveTo(px(pts[lo].lat, pts[lo].lon), py(pts[lo].lat, pts[lo].lon));
+    for (let i = lo + 1; i <= hi; i++) {
+      ctx.lineTo(px(pts[i].lat, pts[i].lon), py(pts[i].lat, pts[i].lon));
+    }
     ctx.stroke();
   }
   ctx.globalAlpha = 1;
@@ -231,24 +249,23 @@ function drawTrail(
 function drawContrail(
   ctx: CanvasRenderingContext2D,
   track: Track,
-  project: (lat: number, lon: number) => ScreenPoint,
+  px: (lat: number, lon: number) => number,
+  py: (lat: number, lon: number) => number,
 ): void {
   const pts = track.trail;
-  if (pts.length < 2) return;
-  const start = Math.max(1, pts.length - 30);
+  const n = pts.length;
+  if (n < 2) return;
+  const start = Math.max(1, n - 30);
   ctx.strokeStyle = "rgba(245, 248, 255, 1)";
   ctx.lineCap = "round";
-  for (let i = start; i < pts.length; i++) {
-    const a = project(pts[i - 1].lat, pts[i - 1].lon);
-    const b = project(pts[i].lat, pts[i].lon);
-    const f = (i - start) / (pts.length - start);
-    ctx.globalAlpha = f * 0.18;
-    ctx.lineWidth = 1 + f * 3;
-    ctx.beginPath();
-    ctx.moveTo(a.x, a.y);
-    ctx.lineTo(b.x, b.y);
-    ctx.stroke();
+  ctx.lineWidth = 2.5;
+  ctx.globalAlpha = 0.14;
+  ctx.beginPath();
+  ctx.moveTo(px(pts[start - 1].lat, pts[start - 1].lon), py(pts[start - 1].lat, pts[start - 1].lon));
+  for (let i = start; i < n; i++) {
+    ctx.lineTo(px(pts[i].lat, pts[i].lon), py(pts[i].lat, pts[i].lon));
   }
+  ctx.stroke();
   ctx.globalAlpha = 1;
   ctx.lineCap = "butt";
 }
