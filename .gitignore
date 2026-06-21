@@ -10,3 +10,4 @@ server/dist/
 # Electron build outputs
 release/
 electron/server.cjs
+build/

@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useStore } from "../state/store";
 import type { AirShowConfig } from "../types";
+import { AboutDialog } from "./AboutDialog";
 
 const PRESETS: Record<string, { centerLat: number; centerLon: number }> = {
   "DFW Area": { centerLat: 33.1976, centerLon: -96.6153 },
@@ -30,6 +31,7 @@ export function ConfigPanel() {
   const config = useStore((s) => s.config);
   const setConfig = useStore((s) => s.setConfig);
   const [open, setOpen] = useState(true);
+  const [aboutOpen, setAboutOpen] = useState(false);
   const [geoStatus, setGeoStatus] = useState<string>("");
 
   const update = (patch: Partial<AirShowConfig>) => setConfig(patch);
@@ -220,7 +222,13 @@ export function ConfigPanel() {
         ⟳ Refresh / reconnect
       </button>
 
+      <button className="config-about" onClick={() => setAboutOpen(true)}>
+        ⓘ About
+      </button>
+
       <p className="config-note">Live stream · server pushes updates ~1×/sec</p>
+
+      {aboutOpen && <AboutDialog onClose={() => setAboutOpen(false)} />}
     </div>
   );
 }
