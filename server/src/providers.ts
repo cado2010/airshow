@@ -11,7 +11,20 @@ import type { Aircraft } from "./types.js";
  */
 const insecureTls = process.env.AIRSHOW_INSECURE_TLS !== "0";
 export const outboundDispatcher = insecureTls
-  ? new Agent({ connect: { rejectUnauthorized: false } })
+  ? new Agent({
+      connect: { rejectUnauthorized: false, timeout: 9_000 },
+      // Reuse warm sockets across the ~1s poll cadence (cold connects through a
+      // TLS-intercepting proxy can be slow). Header/body timeouts bound a hung
+      // socket so a dropped connection fails fast and fails over instead of
+      // freezing the whole feed.
+      keepAliveTimeout: 10_000,
+      headersTimeout: 9_000,
+      bodyTimeout: 9_000,
+      // Cap sockets per origin so a leak/slow upstream can't accumulate
+      // connections unbounded.
+      connections: 8,
+      pipelining: 1,
+    })
   : undefined;
 
 export interface ProviderQuery {
@@ -53,7 +66,10 @@ export interface FetchResult {
   aircraft: Aircraft[];
 }
 
-const FETCH_TIMEOUT_MS = 8000;
+// Short enough to fail over quickly when a provider hangs (warm sockets to a
+// healthy provider respond in well under a second), long enough to tolerate an
+// occasional cold TLS connect through the proxy.
+const FETCH_TIMEOUT_MS = 4500;
 
 async function fetchProvider(
   provider: Provider,
@@ -72,6 +88,10 @@ async function fetchProvider(
       ...(outboundDispatcher ? { dispatcher: outboundDispatcher } : {}),
     } as RequestInit);
     if (!res.ok) {
+      // Drain the body so undici returns the socket to the keep-alive pool;
+      // otherwise non-OK responses (429/503/etc) leak connections over time
+      // until the agent runs out and the whole feed stalls.
+      await res.body?.cancel().catch(() => {});
       throw new Error(`HTTP ${res.status}`);
     }
     const data = await res.json();
@@ -81,12 +101,23 @@ async function fetchProvider(
   }
 }
 
-/** Try each provider in order until one succeeds. */
+// Remember which provider last worked so we try it first. Otherwise a single
+// slow/hanging provider at the head of the list costs a full timeout on every
+// poll before failing over, throttling the whole feed.
+let preferredIndex = 0;
+
+/** Try each provider, starting with the last good one, until one succeeds. */
 export async function fetchAircraft(query: ProviderQuery): Promise<FetchResult> {
   const errors: string[] = [];
-  for (const provider of PROVIDERS) {
+  const order = [
+    preferredIndex,
+    ...PROVIDERS.map((_, i) => i).filter((i) => i !== preferredIndex),
+  ];
+  for (const idx of order) {
+    const provider = PROVIDERS[idx];
     try {
       const aircraft = await fetchProvider(provider, query);
+      preferredIndex = idx;
       return { source: provider.name, aircraft };
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);

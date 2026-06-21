@@ -343,15 +343,34 @@ function drawRadarOverlay(
 
   const outer = projection.metersToPixels(milesToMeters(config.radiusMiles), vp);
   const angle = (Date.now() / 4000) % (Math.PI * 2);
-  const grad = ctx.createLinearGradient(
+
+  // Trailing afterglow wedge behind the leading edge (conic gradient is bright
+  // at the beam and fades out over SWEEP_TRAIL radians of just-swept sky).
+  const SWEEP_TRAIL = Math.PI / 2.2;
+  const trailFrac = SWEEP_TRAIL / (Math.PI * 2);
+  ctx.save();
+  ctx.beginPath();
+  ctx.arc(cx, cy, outer, 0, Math.PI * 2);
+  ctx.clip();
+  const cone = ctx.createConicGradient(angle, cx, cy);
+  cone.addColorStop(0, "rgba(120, 200, 160, 0)");
+  cone.addColorStop(Math.max(0, 1 - trailFrac), "rgba(120, 200, 160, 0)");
+  cone.addColorStop(1 - trailFrac * 0.5, "rgba(120, 200, 160, 0.025)");
+  cone.addColorStop(1, "rgba(150, 230, 185, 0.10)");
+  ctx.fillStyle = cone;
+  ctx.fillRect(cx - outer, cy - outer, outer * 2, outer * 2);
+  ctx.restore();
+
+  // Crisp leading edge of the beam.
+  const lead = ctx.createLinearGradient(
     cx,
     cy,
     cx + Math.cos(angle) * outer,
     cy + Math.sin(angle) * outer,
   );
-  grad.addColorStop(0, "rgba(120, 200, 160, 0.16)");
-  grad.addColorStop(1, "rgba(120, 200, 160, 0)");
-  ctx.strokeStyle = grad;
+  lead.addColorStop(0, "rgba(170, 245, 200, 0.35)");
+  lead.addColorStop(1, "rgba(150, 230, 185, 0)");
+  ctx.strokeStyle = lead;
   ctx.lineWidth = 2;
   ctx.beginPath();
   ctx.moveTo(cx, cy);

@@ -157,18 +157,41 @@ export class StreamHub {
     } else if (region.ticks % 15 === 0) {
       // Heartbeat keeps proxies/connections from idling out.
       for (const client of region.clients.values()) {
-        client.res.write(": ping\n\n");
+        this.write(region, client, ": ping\n\n");
       }
+    }
+
+    // If every client dropped (e.g. all sockets died), stop polling upstream
+    // for this region so dead regions don't keep hitting the providers.
+    if (region.clients.size === 0 && region.timer) {
+      clearInterval(region.timer);
+      region.timer = null;
+      this.regions.delete(region.key);
     }
   }
 
   private broadcast(region: Region, payload: unknown): void {
+    const frame = `data: ${JSON.stringify(payload)}\n\n`;
     for (const client of region.clients.values()) {
-      this.send(client, payload);
+      this.write(region, client, frame);
     }
   }
 
   private send(client: Client, payload: unknown): void {
     client.res.write(`data: ${JSON.stringify(payload)}\n\n`);
+  }
+
+  /** Write to one client, dropping it if its socket has gone away. */
+  private write(region: Region, client: Client, frame: string): void {
+    try {
+      client.res.write(frame);
+    } catch {
+      region.clients.delete(client.id);
+      try {
+        client.res.end();
+      } catch {
+        /* already closed */
+      }
+    }
   }
 }

@@ -10,7 +10,7 @@ export default function App() {
     <div className="app">
       <CeilingCanvas />
       <header className="app-title">
-        AirShow <span className="phase">Phase 1 · ceiling dot-map</span>
+        AirShow <span className="phase">live ceiling radar</span>
       </header>
       <StatusBar />
       <ConfigPanel />

@@ -184,6 +184,14 @@ export function ConfigPanel() {
         Show city names in route
       </label>
 
+      <button
+        className="config-refresh"
+        onClick={() => window.location.reload()}
+        title="Reload the app, dropping all connections and starting fresh"
+      >
+        ⟳ Refresh / reconnect
+      </button>
+
       <p className="config-note">Live stream · server pushes updates ~1×/sec</p>
     </div>
   );

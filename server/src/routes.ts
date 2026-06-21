@@ -66,9 +66,16 @@ async function fetchRoute(callsign: string): Promise<FlightRoute | null> {
     ...(outboundDispatcher ? { dispatcher: outboundDispatcher } : {}),
   } as RequestInit);
 
-  // 404 => unknown callsign; treat as a (cached) negative result.
-  if (res.status === 404) return null;
-  if (!res.ok) throw new Error(`adsbdb ${res.status}`);
+  // 404 => unknown callsign; treat as a (cached) negative result. Drain the
+  // body on every non-JSON path so undici releases the keep-alive socket.
+  if (res.status === 404) {
+    await res.body?.cancel().catch(() => {});
+    return null;
+  }
+  if (!res.ok) {
+    await res.body?.cancel().catch(() => {});
+    throw new Error(`adsbdb ${res.status}`);
+  }
 
   const data = (await res.json()) as AdsbdbResponse;
   if (!data.response || typeof data.response === "string") return null;

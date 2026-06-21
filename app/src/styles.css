@@ -147,6 +147,21 @@ body,
   color: rgba(150, 220, 180, 0.55);
 }
 
+.config-panel .config-refresh {
+  margin-top: 4px;
+  width: 100%;
+  background: rgba(95, 211, 155, 0.14);
+  border: 1px solid rgba(95, 211, 155, 0.5);
+  color: rgba(220, 245, 232, 0.95);
+  font-size: 13px;
+  font-weight: 600;
+  padding: 8px 12px;
+}
+
+.config-panel .config-refresh:hover {
+  background: rgba(95, 211, 155, 0.24);
+}
+
 .config-panel label.config-check {
   flex-direction: row;
   align-items: center;

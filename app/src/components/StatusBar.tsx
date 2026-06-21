@@ -1,4 +1,9 @@
+import { useEffect, useState } from "react";
 import { useStore } from "../state/store";
+
+// Data arrives ~1×/sec; classify the feed by how long since the last update.
+const LAGGING_MS = 5_000;
+const STALE_MS = 12_000;
 
 export function StatusBar() {
   const status = useStore((s) => s.status);
@@ -7,12 +12,35 @@ export function StatusBar() {
   const count = useStore((s) => s.aircraft.length);
   const lastUpdated = useStore((s) => s.lastUpdated);
 
-  const dotClass =
-    status === "ok" ? "ok" : status === "error" ? "error" : "loading";
+  // Re-render on a timer so staleness is reflected even when no data arrives
+  // (a frozen feed never triggers a store update on its own).
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, []);
 
-  const updated = lastUpdated
-    ? new Date(lastUpdated).toLocaleTimeString()
-    : "—";
+  const age = lastUpdated ? now - lastUpdated : Infinity;
+
+  let health: "live" | "lagging" | "stale";
+  if (status === "error" || age > STALE_MS) health = "stale";
+  else if (status !== "ok" || age > LAGGING_MS) health = "lagging";
+  else health = "live";
+
+  const dotClass =
+    health === "live" ? "ok" : health === "lagging" ? "loading" : "error";
+
+  const ageText =
+    !lastUpdated
+      ? "—"
+      : age < 2000
+        ? "live"
+        : `${Math.round(age / 1000)}s ago`;
+
+  const detail =
+    health === "stale" && lastUpdated
+      ? error || "feed stalled — reconnecting…"
+      : error || source || "connecting…";
 
   return (
     <div className="status-bar">
@@ -20,9 +48,9 @@ export function StatusBar() {
       <strong>{count}</strong>
       <span className="muted">aircraft</span>
       <span className="sep">·</span>
-      <span className="muted">{error ? error : source || "connecting…"}</span>
+      <span className="muted">{detail}</span>
       <span className="sep">·</span>
-      <span className="muted">{updated}</span>
+      <span className="muted">{ageText}</span>
     </div>
   );
 }

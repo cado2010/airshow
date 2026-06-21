@@ -32,28 +32,62 @@ export function useStream(): void {
 
   useEffect(() => {
     const distNm = Math.min(Math.round(milesToNm(config.radiusMiles)), 250);
-    const url = `/api/stream?lat=${config.centerLat}&lon=${config.centerLon}&dist=${distNm}`;
+    // The Vite dev proxy buffers SSE (only the initial snapshot gets through,
+    // deltas stall), so in dev connect straight to the backend (CORS is open).
+    // In a production build, use same-origin (served behind a real proxy).
+    const env = import.meta.env as Record<string, string | undefined>;
+    const sseBase =
+      env.VITE_SSE_BASE ?? (import.meta.env.DEV ? "http://localhost:8787" : "");
+    const url = `${sseBase}/api/stream?lat=${config.centerLat}&lon=${config.centerLon}&dist=${distNm}`;
 
-    setStatus("loading");
-    const es = new EventSource(url);
+    // Watchdog: EventSource's built-in retry can wedge (e.g. the dev server
+    // restarts, or a proxy half-opens the connection) leaving us "connected"
+    // but receiving nothing. If no frame arrives for STALE_MS, force a full
+    // reconnect so the feed self-heals instead of silently freezing.
+    const STALE_MS = 10_000;
+    let es: EventSource | null = null;
+    let lastMessageAt = Date.now();
+    let closed = false;
 
-    es.onmessage = (event) => {
-      try {
-        const msg = JSON.parse(event.data) as StreamMsg;
-        if (msg.type === "snapshot") {
-          applySnapshot(msg);
-        } else if (msg.type === "delta") {
-          applyDelta(msg);
+    const connect = () => {
+      if (closed) return;
+      es?.close();
+      setStatus("loading");
+      lastMessageAt = Date.now();
+      es = new EventSource(url);
+
+      es.onmessage = (event) => {
+        lastMessageAt = Date.now();
+        try {
+          const msg = JSON.parse(event.data) as StreamMsg;
+          if (msg.type === "snapshot") {
+            applySnapshot(msg);
+          } else if (msg.type === "delta") {
+            applyDelta(msg);
+          }
+        } catch {
+          /* ignore malformed frame */
         }
-      } catch {
-        /* ignore malformed frame */
+      };
+
+      es.onerror = () => {
+        setStatus("error", "stream disconnected — reconnecting…");
+      };
+    };
+
+    connect();
+
+    const watchdog = setInterval(() => {
+      if (Date.now() - lastMessageAt > STALE_MS) {
+        setStatus("error", "feed stalled — reconnecting…");
+        connect();
       }
-    };
+    }, 3000);
 
-    es.onerror = () => {
-      setStatus("error", "stream disconnected — reconnecting…");
+    return () => {
+      closed = true;
+      clearInterval(watchdog);
+      es?.close();
     };
-
-    return () => es.close();
   }, [config, applySnapshot, applyDelta, setStatus]);
 }
