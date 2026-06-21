@@ -4,6 +4,7 @@ import { AircraftCache } from "./cache.js";
 import { ReplayBuffer } from "./replayBuffer.js";
 import { StreamHub } from "./stream.js";
 import { outboundDispatcher } from "./providers.js";
+import { lookupRoute } from "./routes.js";
 import type { AircraftResponse } from "./types.js";
 
 const PORT = Number(process.env.PORT ?? 8787);
@@ -63,6 +64,25 @@ app.get("/api/geolocate", async (_req, res) => {
     res.status(502).json({
       error: err instanceof Error ? err.message : String(err),
     });
+  }
+});
+
+/** Flight origin/destination by callsign (cached). 204 when unknown. */
+app.get("/api/route", async (req, res) => {
+  const callsign = typeof req.query.callsign === "string" ? req.query.callsign : "";
+  if (!callsign.trim()) {
+    res.status(400).json({ error: "callsign is required" });
+    return;
+  }
+  try {
+    const route = await lookupRoute(callsign);
+    if (!route) {
+      res.status(204).end();
+      return;
+    }
+    res.json(route);
+  } catch (err) {
+    res.status(502).json({ error: err instanceof Error ? err.message : String(err) });
   }
 });
 

@@ -12,6 +12,7 @@ import {
   airlineName,
   loadLogoManifest,
 } from "../identity/airlines";
+import { getRoute, airportCode, airportCity } from "../identity/routes";
 import type { AirShowConfig } from "../types";
 
 const OVERLAY = "rgba(120, 200, 160, 0.16)";
@@ -64,6 +65,18 @@ function intentFor(onGround: boolean, altFt: number, vrate: number): string {
   if (vrate <= -300) return "Descending";
   if (altFt >= 18000) return "Cruising";
   return "Level flight";
+}
+
+/** Popup route line: "Route: ORIG → DEST", "Route: …" while loading, or "". */
+function routeLine(callsign: string | undefined, cityNames: boolean): string {
+  const route = getRoute(callsign);
+  if (route === undefined) return "Route: \u2026";
+  if (route === null) return "";
+  const pick = cityNames ? airportCity : airportCode;
+  const from = pick(route.origin);
+  const to = pick(route.destination);
+  if (!from && !to) return "";
+  return `Route: ${from ?? "?"} \u2192 ${to ?? "?"}`;
 }
 
 export function CeilingCanvas() {
@@ -166,7 +179,7 @@ export function CeilingCanvas() {
       }
 
       plottedRef.current = plotted;
-      drawHover(ctx, plotted, mouseRef.current);
+      drawHover(ctx, plotted, mouseRef.current, cfg.routeCityNames);
 
       raf = requestAnimationFrame(draw);
     };
@@ -346,6 +359,7 @@ function drawHover(
   ctx: CanvasRenderingContext2D,
   plotted: Plotted[],
   mouse: { x: number; y: number } | null,
+  cityNames: boolean,
 ): void {
   if (!mouse) return;
   let nearest: Plotted | null = null;
@@ -381,6 +395,7 @@ function drawHover(
   const lines = [
     a.callsign || a.hex.toUpperCase(),
     operatorLine,
+    routeLine(a.callsign, cityNames),
     `Intent: ${intent}${vrTxt}`,
     a.typeCode ? `Type ${a.typeCode}` : "Type ?",
     a.onGround ? "On ground" : `${Math.round(track.render.altFt).toLocaleString()} ft`,

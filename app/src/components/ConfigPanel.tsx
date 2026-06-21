@@ -175,6 +175,15 @@ export function ConfigPanel() {
         Hide aircraft on the ground
       </label>
 
+      <label className="config-check">
+        <input
+          type="checkbox"
+          checked={config.routeCityNames}
+          onChange={(e) => update({ routeCityNames: e.target.checked })}
+        />
+        Show city names in route
+      </label>
+
       <p className="config-note">Live stream · server pushes updates ~1×/sec</p>
     </div>
   );
