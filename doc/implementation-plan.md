@@ -130,6 +130,31 @@ Time controls/replay UI; Projector mode (P: fullscreen/hide UI+cursor); audio (o
 
 *Milestone: meets all 8 success criteria.*
 
+### Location search — Layer 1 (offline airport/city) — **implemented**
+
+A search box in the config panel lets the user jump to any airport by **IATA/ICAO
+code, airport name, or city** — fully offline, no geocoding service.
+
+- **Data:** `scripts/fetch-airports.mjs` downloads the open **OurAirports**
+  dataset and writes a compact, pre-ranked columnar JSON to
+  `app/public/airports.json` (~72k airports, excludes closed). Format:
+  `[icao, iata, name, city, country, lat, lon, importance]`, where `importance`
+  (0–5) is derived from airport type + scheduled-service so major fields rank
+  above small strips. Ships as an external resource (served from `dist/`),
+  consistent with the logos/version files.
+- **Client:** `app/src/identity/airports.ts` lazy-loads the dataset on first
+  focus of the search box (never blocks first paint) and ranks matches: exact
+  code > code prefix > city/name `startsWith` > substring, with `importance` as
+  the tie-breaker. `ConfigPanel` renders a results dropdown; selecting a result
+  sets `centerLat/centerLon/locationLabel` (reusing the existing "Custom"
+  selection path), so the map recenters and the stream re-subscribes.
+- **Regenerate:** `npm run fetch:airports` (re-run to refresh the dataset).
+
+> **Layer 2 (future, online geocoder):** for arbitrary places/landmarks beyond
+> airports, add an `/api/search` proxy endpoint backed by a free geocoder
+> (Open-Meteo recommended) with server-side caching — see the location-search
+> strategy. Not required for Layer 1.
+
 ### Phase 6 — Mobile apps (Android + iOS)
 
 > Status: **design only** (this section). No code yet. Goal: ship native

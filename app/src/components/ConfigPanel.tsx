@@ -1,7 +1,13 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useStore } from "../state/store";
 import type { AirShowConfig } from "../types";
 import { AboutDialog } from "./AboutDialog";
+import {
+  loadAirports,
+  searchAirports,
+  airportLabel,
+  type Airport,
+} from "../identity/airports";
 
 const PRESETS: Record<string, { centerLat: number; centerLon: number }> = {
   "DFW Area": { centerLat: 33.1976, centerLon: -96.6153 },
@@ -34,7 +40,39 @@ export function ConfigPanel() {
   const [aboutOpen, setAboutOpen] = useState(false);
   const [geoStatus, setGeoStatus] = useState<string>("");
 
+  const [query, setQuery] = useState("");
+  const [results, setResults] = useState<Airport[]>([]);
+  const [searchReady, setSearchReady] = useState(false);
+  const blurTimer = useRef<number | undefined>(undefined);
+
   const update = (patch: Partial<AirShowConfig>) => setConfig(patch);
+
+  // Load the airport dataset lazily so it never delays first paint.
+  const ensureAirports = () => {
+    if (searchReady) return;
+    void loadAirports().then(() => setSearchReady(true));
+  };
+
+  const onQuery = (value: string) => setQuery(value);
+
+  // Recompute matches when the query changes or the dataset finishes loading.
+  useEffect(() => {
+    setResults(searchReady ? searchAirports(query) : []);
+  }, [query, searchReady]);
+
+  const pickAirport = (a: Airport) => {
+    update({
+      centerLat: Number(a.lat.toFixed(4)),
+      centerLon: Number(a.lon.toFixed(4)),
+      locationLabel: airportLabel(a),
+    });
+    setQuery("");
+    setResults([]);
+  };
+
+  useEffect(() => {
+    return () => window.clearTimeout(blurTimer.current);
+  }, []);
 
   // Falls back to server IP-based geolocation when the browser's WiFi/network
   // location service is unavailable.
@@ -108,6 +146,41 @@ export function ConfigPanel() {
         <span>Configuration</span>
         <button onClick={() => setOpen(false)}>×</button>
       </div>
+
+      <label className="config-search">
+        Search airport / city
+        <input
+          type="text"
+          placeholder="e.g. DFW, Chennai, Heathrow…"
+          value={query}
+          onFocus={ensureAirports}
+          onChange={(e) => onQuery(e.target.value)}
+          onBlur={() => {
+            blurTimer.current = window.setTimeout(() => setResults([]), 150);
+          }}
+        />
+        {results.length > 0 && (
+          <ul className="search-results">
+            {results.map((a) => (
+              <li
+                key={`${a.icao}-${a.iata}-${a.lat}-${a.lon}`}
+                onMouseDown={() => pickAirport(a)}
+              >
+                <span className="search-code">{a.iata || a.icao || "—"}</span>
+                <span className="search-name">
+                  {a.name}
+                  <span className="search-place">
+                    {[a.city, a.country].filter(Boolean).join(", ")}
+                  </span>
+                </span>
+              </li>
+            ))}
+          </ul>
+        )}
+        {query.length >= 2 && searchReady && results.length === 0 && (
+          <span className="search-empty">No matches</span>
+        )}
+      </label>
 
       <label>
         Location
