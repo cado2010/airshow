@@ -14,8 +14,67 @@ export function ConfigPanel() {
   const config = useStore((s) => s.config);
   const setConfig = useStore((s) => s.setConfig);
   const [open, setOpen] = useState(true);
+  const [geoStatus, setGeoStatus] = useState<string>("");
 
   const update = (patch: Partial<AirShowConfig>) => setConfig(patch);
+
+  // Falls back to server IP-based geolocation when the browser's WiFi/network
+  // location service is unavailable.
+  const geolocateByIp = async () => {
+    try {
+      const res = await fetch("/api/geolocate");
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const d = (await res.json()) as { lat: number; lon: number; label: string };
+      update({
+        centerLat: Number(d.lat.toFixed(4)),
+        centerLon: Number(d.lon.toFixed(4)),
+        locationLabel: d.label || "Current location",
+      });
+      setGeoStatus("");
+    } catch (err) {
+      setGeoStatus(
+        `Location failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  };
+
+  const useCurrentLocation = () => {
+    setGeoStatus("Locating…");
+    if (!navigator.geolocation) {
+      void geolocateByIp();
+      return;
+    }
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        update({
+          centerLat: Number(pos.coords.latitude.toFixed(4)),
+          centerLon: Number(pos.coords.longitude.toFixed(4)),
+          locationLabel: "Current location",
+        });
+        setGeoStatus("");
+      },
+      // Browser geo failed (e.g. network location service blocked) -> use IP.
+      () => void geolocateByIp(),
+      { enableHighAccuracy: false, timeout: 8000, maximumAge: 60000 },
+    );
+  };
+
+  const onPreset = (value: string) => {
+    if (value === "__current__") {
+      useCurrentLocation();
+      return;
+    }
+    const p = PRESETS[value];
+    if (p) update({ ...p, locationLabel: value });
+  };
+
+  // Reflect the current selection in the dropdown.
+  const presetMatch = Object.keys(PRESETS).find((name) => {
+    const p = PRESETS[name];
+    return p.centerLat === config.centerLat && p.centerLon === config.centerLon;
+  });
+  const selectValue = presetMatch ?? "__custom__";
+  const customLabel = config.locationLabel || "Custom";
 
   if (!open) {
     return (
@@ -33,15 +92,12 @@ export function ConfigPanel() {
       </div>
 
       <label>
-        Preset
-        <select
-          value=""
-          onChange={(e) => {
-            const p = PRESETS[e.target.value];
-            if (p) update(p);
-          }}
-        >
-          <option value="">Choose…</option>
+        Location
+        <select value={selectValue} onChange={(e) => onPreset(e.target.value)}>
+          {selectValue === "__custom__" && (
+            <option value="__custom__">{customLabel}</option>
+          )}
+          <option value="__current__">📍 Current location</option>
           {Object.keys(PRESETS).map((name) => (
             <option key={name} value={name}>
               {name}
@@ -49,6 +105,7 @@ export function ConfigPanel() {
           ))}
         </select>
       </label>
+      {geoStatus && <p className="config-note">{geoStatus}</p>}
 
       <label>
         Center latitude
@@ -56,7 +113,9 @@ export function ConfigPanel() {
           type="number"
           step="0.0001"
           value={config.centerLat}
-          onChange={(e) => update({ centerLat: Number(e.target.value) })}
+          onChange={(e) =>
+            update({ centerLat: Number(e.target.value), locationLabel: "Custom" })
+          }
         />
       </label>
 
@@ -66,7 +125,9 @@ export function ConfigPanel() {
           type="number"
           step="0.0001"
           value={config.centerLon}
-          onChange={(e) => update({ centerLon: Number(e.target.value) })}
+          onChange={(e) =>
+            update({ centerLon: Number(e.target.value), locationLabel: "Custom" })
+          }
         />
       </label>
 
@@ -78,6 +139,18 @@ export function ConfigPanel() {
           max={150}
           value={config.radiusMiles}
           onChange={(e) => update({ radiusMiles: Number(e.target.value) })}
+        />
+      </label>
+
+      <label>
+        Aircraft size · {Math.round(config.aircraftScale * 100)}%
+        <input
+          type="range"
+          min={0.2}
+          max={1}
+          step={0.05}
+          value={config.aircraftScale}
+          onChange={(e) => update({ aircraftScale: Number(e.target.value) })}
         />
       </label>
 

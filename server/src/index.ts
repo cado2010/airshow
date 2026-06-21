@@ -3,6 +3,7 @@ import cors from "cors";
 import { AircraftCache } from "./cache.js";
 import { ReplayBuffer } from "./replayBuffer.js";
 import { StreamHub } from "./stream.js";
+import { outboundDispatcher } from "./providers.js";
 import type { AircraftResponse } from "./types.js";
 
 const PORT = Number(process.env.PORT ?? 8787);
@@ -29,6 +30,40 @@ function parseQuery(req: express.Request): {
 
 app.get("/api/health", (_req, res) => {
   res.json({ ok: true, replay: replay.span });
+});
+
+/** Approximate location from public IP (fallback when browser geo fails). */
+app.get("/api/geolocate", async (_req, res) => {
+  try {
+    const r = await fetch(
+      "http://ip-api.com/json/?fields=status,message,lat,lon,city,regionName",
+      {
+        headers: { "User-Agent": "AirShow/0.1" },
+        ...(outboundDispatcher ? { dispatcher: outboundDispatcher } : {}),
+      } as RequestInit,
+    );
+    const d = (await r.json()) as {
+      status?: string;
+      message?: string;
+      lat?: number;
+      lon?: number;
+      city?: string;
+      regionName?: string;
+    };
+    if (d.status !== "success" || typeof d.lat !== "number") {
+      throw new Error(d.message || "IP lookup failed");
+    }
+    res.json({
+      lat: d.lat,
+      lon: d.lon,
+      label:
+        [d.city, d.regionName].filter(Boolean).join(", ") || "Current location",
+    });
+  } catch (err) {
+    res.status(502).json({
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
 });
 
 /** Server-Sent Events stream: full snapshot on connect, then deltas. */

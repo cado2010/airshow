@@ -2,44 +2,94 @@ import { useEffect, useMemo, useRef } from "react";
 import { useStore } from "../state/store";
 import { PlanarProjection, type Viewport, type ScreenPoint } from "../geo/projection";
 import { milesToMeters, toLocalMeters } from "../geo/geo";
-import type { Aircraft, AirShowConfig } from "../types";
+import { TrackManager, type Track } from "../motion/track";
+import { classifyType, colorFor, CLASS_META, type AircraftClass } from "../identity/types";
+import { drawSilhouette } from "./silhouettes";
+import {
+  getLogo,
+  logoReady,
+  operatorIcao,
+  loadLogoManifest,
+} from "../identity/airlines";
+import type { AirShowConfig } from "../types";
 
-interface Plotted {
-  ac: Aircraft;
-  pt: ScreenPoint;
-}
-
-const OVERLAY = "rgba(120, 200, 160, 0.16)"; // faint radar green, ~16% opacity
+const OVERLAY = "rgba(120, 200, 160, 0.16)";
 const OVERLAY_TEXT = "rgba(150, 220, 180, 0.55)";
 
-/** Pale, desaturated altitude tint (low = warm white, high = cool). */
-function altitudeColor(ac: Aircraft): string {
-  if (ac.onGround) return "rgba(140, 150, 160, 0.85)";
-  const alt = ac.altFt ?? 0;
-  const t = Math.max(0, Math.min(1, alt / 40000));
-  const r = Math.round(245 - t * 70);
-  const g = Math.round(245 - t * 20);
-  const b = Math.round(220 + t * 35);
-  return `rgb(${r}, ${g}, ${b})`;
+interface Plotted {
+  track: Track;
+  pt: ScreenPoint;
+  size: number;
+  cls: AircraftClass;
+  operator?: string;
+}
+
+const classCache = new Map<string, AircraftClass>();
+function classOf(typeCode?: string): AircraftClass {
+  const key = typeCode ?? "";
+  let c = classCache.get(key);
+  if (!c) {
+    c = classifyType(typeCode);
+    classCache.set(key, c);
+  }
+  return c;
+}
+
+function lerp(a: number, b: number, t: number): number {
+  return a + (b - a) * Math.max(0, Math.min(1, t));
+}
+
+/** Clamped, non-linear altitude -> wingspan px (spec tables, floor 34). */
+function sizeForAlt(alt: number): number {
+  let s: number;
+  if (alt <= 3000) s = lerp(110, 90, alt / 3000);
+  else if (alt <= 10000) s = lerp(90, 70, (alt - 3000) / 7000);
+  else if (alt <= 25000) s = lerp(70, 50, (alt - 10000) / 15000);
+  else if (alt <= 45000) s = lerp(50, 34, (alt - 25000) / 20000);
+  else s = 34;
+  return Math.max(34, s);
+}
+
+function alphaForAlt(alt: number): number {
+  return lerp(1, 0.72, alt / 45000);
+}
+
+/** Infer a phase-of-flight from altitude and vertical rate. */
+function intentFor(onGround: boolean, altFt: number, vrate: number): string {
+  if (onGround) return "On ground";
+  if (vrate >= 500 && altFt < 8000) return "Taking off";
+  if (vrate >= 300) return "Climbing";
+  if (vrate <= -500 && altFt < 8000) return "Landing";
+  if (vrate <= -300) return "Descending";
+  if (altFt >= 18000) return "Cruising";
+  return "Level flight";
 }
 
 export function CeilingCanvas() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const config = useStore((s) => s.config);
 
-  // Latest values exposed to the persistent animation loop via refs.
-  const aircraftRef = useRef<Aircraft[]>([]);
+  const aircraft = useStore((s) => s.aircraft);
   const configRef = useRef<AirShowConfig>(config);
+  const tmRef = useRef<TrackManager>(new TrackManager());
   const plottedRef = useRef<Plotted[]>([]);
   const mouseRef = useRef<{ x: number; y: number } | null>(null);
 
-  aircraftRef.current = useStore((s) => s.aircraft);
   configRef.current = config;
 
   const projection = useMemo(
     () => new PlanarProjection(milesToMeters(config.radiusMiles)),
     [config.radiusMiles],
   );
+
+  useEffect(() => {
+    void loadLogoManifest();
+  }, []);
+
+  // Feed new server data into the interpolating track manager.
+  useEffect(() => {
+    tmRef.current.ingest(aircraft, Date.now());
+  }, [aircraft]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -62,36 +112,58 @@ export function CeilingCanvas() {
     const ro = new ResizeObserver(resize);
     ro.observe(canvas);
 
+    const project = (lat: number, lon: number): ScreenPoint => {
+      const { east, north } = toLocalMeters(
+        lat,
+        lon,
+        configRef.current.centerLat,
+        configRef.current.centerLon,
+      );
+      return projection.project(east, north, vp);
+    };
+
     const draw = () => {
-      const { width, height } = vp;
-      const cx = width / 2;
-      const cy = height / 2;
-
-      ctx.clearRect(0, 0, width, height);
+      const now = Date.now();
+      ctx.clearRect(0, 0, vp.width, vp.height);
       ctx.fillStyle = "#000";
-      ctx.fillRect(0, 0, width, height);
+      ctx.fillRect(0, 0, vp.width, vp.height);
 
-      drawRadarOverlay(ctx, projection, vp, cx, cy, configRef.current);
+      drawRadarOverlay(ctx, projection, vp, configRef.current);
 
-      // Plot aircraft as dots with a short heading vector.
+      const tracks = tmRef.current.frame(now);
       const plotted: Plotted[] = [];
-      for (const ac of aircraftRef.current) {
-        const { east, north } = toLocalMeters(
-          ac.lat,
-          ac.lon,
-          configRef.current.centerLat,
-          configRef.current.centerLon,
-        );
-        const pt = projection.project(east, north, vp);
-        if (pt.x < -20 || pt.x > width + 20 || pt.y < -20 || pt.y > height + 20) {
+
+      for (const track of tracks) {
+        const r = track.render;
+        const pt = project(r.lat, r.lon);
+        if (pt.x < -60 || pt.x > vp.width + 60 || pt.y < -60 || pt.y > vp.height + 60) {
           continue;
         }
-        plotted.push({ ac, pt });
-        drawAircraftDot(ctx, ac, pt);
-      }
-      plottedRef.current = plotted;
+        const cls = classOf(track.data.typeCode);
+        const operator = operatorIcao(track.data.callsign);
+        const color = colorFor(cls, operator);
+        const size = sizeForAlt(r.altFt) * configRef.current.aircraftScale;
+        const alpha = alphaForAlt(r.altFt);
 
-      drawHover(ctx, plottedRef.current, mouseRef.current);
+        drawTrail(ctx, track, project, color);
+        if (r.altFt > 30000) drawContrail(ctx, track, project);
+
+        // Silhouette (rotated to heading)
+        ctx.save();
+        ctx.translate(pt.x, pt.y);
+        ctx.rotate((r.headingDeg * Math.PI) / 180);
+        ctx.globalAlpha = track.data.onGround ? 0.8 : alpha;
+        drawSilhouette(ctx, cls, size, color);
+        ctx.restore();
+
+        drawLogo(ctx, operator, pt, size);
+        if (track.isNew) drawSpotterPulse(ctx, track, pt, size, now);
+
+        plotted.push({ track, pt, size, cls, operator });
+      }
+
+      plottedRef.current = plotted;
+      drawHover(ctx, plotted, mouseRef.current);
 
       raf = requestAnimationFrame(draw);
     };
@@ -118,14 +190,98 @@ export function CeilingCanvas() {
   );
 }
 
+function drawTrail(
+  ctx: CanvasRenderingContext2D,
+  track: Track,
+  project: (lat: number, lon: number) => ScreenPoint,
+  color: string,
+): void {
+  const pts = track.trail;
+  if (pts.length < 2) return;
+  ctx.lineWidth = 1.6;
+  ctx.strokeStyle = color;
+  for (let i = 1; i < pts.length; i++) {
+    const a = project(pts[i - 1].lat, pts[i - 1].lon);
+    const b = project(pts[i].lat, pts[i].lon);
+    ctx.globalAlpha = (i / pts.length) * 0.45;
+    ctx.beginPath();
+    ctx.moveTo(a.x, a.y);
+    ctx.lineTo(b.x, b.y);
+    ctx.stroke();
+  }
+  ctx.globalAlpha = 1;
+}
+
+function drawContrail(
+  ctx: CanvasRenderingContext2D,
+  track: Track,
+  project: (lat: number, lon: number) => ScreenPoint,
+): void {
+  const pts = track.trail;
+  if (pts.length < 2) return;
+  const start = Math.max(1, pts.length - 30);
+  ctx.strokeStyle = "rgba(245, 248, 255, 1)";
+  ctx.lineCap = "round";
+  for (let i = start; i < pts.length; i++) {
+    const a = project(pts[i - 1].lat, pts[i - 1].lon);
+    const b = project(pts[i].lat, pts[i].lon);
+    const f = (i - start) / (pts.length - start);
+    ctx.globalAlpha = f * 0.18;
+    ctx.lineWidth = 1 + f * 3;
+    ctx.beginPath();
+    ctx.moveTo(a.x, a.y);
+    ctx.lineTo(b.x, b.y);
+    ctx.stroke();
+  }
+  ctx.globalAlpha = 1;
+  ctx.lineCap = "butt";
+}
+
+function drawLogo(
+  ctx: CanvasRenderingContext2D,
+  operator: string | undefined,
+  pt: ScreenPoint,
+  size: number,
+): void {
+  const img = getLogo(operator);
+  if (!logoReady(img)) return;
+  const w = Math.max(10, Math.min(30, size * 0.6));
+  const h = (img.naturalHeight / img.naturalWidth) * w;
+  ctx.globalAlpha = 0.95;
+  ctx.drawImage(img, pt.x - w / 2, pt.y - h / 2, w, h);
+  ctx.globalAlpha = 1;
+}
+
+function drawSpotterPulse(
+  ctx: CanvasRenderingContext2D,
+  track: Track,
+  pt: ScreenPoint,
+  size: number,
+  now: number,
+): void {
+  const age = now - track.firstSeen;
+  if (age > 5000) {
+    track.isNew = false;
+    return;
+  }
+  const phase = (age % 1200) / 1200;
+  const radius = size * 0.55 + phase * size * 0.9;
+  const fade = (1 - phase) * (1 - age / 5000);
+  ctx.strokeStyle = `rgba(255, 80, 80, ${0.7 * fade})`;
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.arc(pt.x, pt.y, radius, 0, Math.PI * 2);
+  ctx.stroke();
+}
+
 function drawRadarOverlay(
   ctx: CanvasRenderingContext2D,
   projection: PlanarProjection,
   vp: Viewport,
-  cx: number,
-  cy: number,
   config: AirShowConfig,
-) {
+): void {
+  const cx = vp.width / 2;
+  const cy = vp.height / 2;
   const rings = 4;
   ctx.lineWidth = 1;
   ctx.strokeStyle = OVERLAY;
@@ -143,7 +299,6 @@ function drawRadarOverlay(
     ctx.fillText(`${Math.round(miles)} mi`, cx + 4, cy - r);
   }
 
-  // Crosshair
   ctx.beginPath();
   ctx.moveTo(cx, 0);
   ctx.lineTo(cx, vp.height);
@@ -151,7 +306,6 @@ function drawRadarOverlay(
   ctx.lineTo(vp.width, cy);
   ctx.stroke();
 
-  // Slow rotating sweep
   const outer = projection.metersToPixels(milesToMeters(config.radiusMiles), vp);
   const angle = (Date.now() / 4000) % (Math.PI * 2);
   const grad = ctx.createLinearGradient(
@@ -160,7 +314,7 @@ function drawRadarOverlay(
     cx + Math.cos(angle) * outer,
     cy + Math.sin(angle) * outer,
   );
-  grad.addColorStop(0, "rgba(120, 200, 160, 0.18)");
+  grad.addColorStop(0, "rgba(120, 200, 160, 0.16)");
   grad.addColorStop(1, "rgba(120, 200, 160, 0)");
   ctx.strokeStyle = grad;
   ctx.lineWidth = 2;
@@ -169,7 +323,6 @@ function drawRadarOverlay(
   ctx.lineTo(cx + Math.cos(angle) * outer, cy + Math.sin(angle) * outer);
   ctx.stroke();
 
-  // Compass labels
   ctx.fillStyle = OVERLAY_TEXT;
   ctx.font = "bold 14px system-ui, sans-serif";
   ctx.textAlign = "center";
@@ -184,76 +337,55 @@ function drawRadarOverlay(
   ctx.fillText("E", vp.width - 6, cy);
 }
 
-function drawAircraftDot(
-  ctx: CanvasRenderingContext2D,
-  ac: Aircraft,
-  pt: ScreenPoint,
-) {
-  const color = altitudeColor(ac);
-
-  // Heading vector
-  if (ac.headingDeg !== undefined) {
-    const rad = (ac.headingDeg * Math.PI) / 180;
-    const len = 12;
-    const dx = Math.sin(rad) * len;
-    const dy = -Math.cos(rad) * len;
-    ctx.strokeStyle = color;
-    ctx.lineWidth = 1.5;
-    ctx.beginPath();
-    ctx.moveTo(pt.x, pt.y);
-    ctx.lineTo(pt.x + dx, pt.y + dy);
-    ctx.stroke();
-  }
-
-  // Glow + dot
-  ctx.fillStyle = color;
-  ctx.shadowColor = color;
-  ctx.shadowBlur = 8;
-  ctx.beginPath();
-  ctx.arc(pt.x, pt.y, 3.5, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.shadowBlur = 0;
-}
-
 function drawHover(
   ctx: CanvasRenderingContext2D,
   plotted: Plotted[],
   mouse: { x: number; y: number } | null,
-) {
+): void {
   if (!mouse) return;
   let nearest: Plotted | null = null;
-  let bestDist = 18; // px hit radius
+  let best = Infinity;
   for (const p of plotted) {
     const d = Math.hypot(p.pt.x - mouse.x, p.pt.y - mouse.y);
-    if (d < bestDist) {
-      bestDist = d;
+    const hit = p.size / 2 + 8;
+    if (d < hit && d < best) {
+      best = d;
       nearest = p;
     }
   }
   if (!nearest) return;
 
-  const { ac, pt } = nearest;
+  const { track, pt, cls, operator } = nearest;
+  const a = track.data;
   ctx.strokeStyle = "rgba(255,255,255,0.8)";
   ctx.lineWidth = 1;
   ctx.beginPath();
-  ctx.arc(pt.x, pt.y, 10, 0, Math.PI * 2);
+  ctx.arc(pt.x, pt.y, nearest.size / 2 + 6, 0, Math.PI * 2);
   ctx.stroke();
 
+  const vrate = a.verticalRateFpm ?? 0;
+  const intent = intentFor(a.onGround, track.render.altFt, vrate);
+  const vrTxt =
+    !a.onGround && Math.abs(vrate) >= 100
+      ? ` (${vrate > 0 ? "+" : ""}${Math.round(vrate)} fpm)`
+      : "";
   const lines = [
-    ac.callsign || ac.hex.toUpperCase(),
-    ac.typeCode ? `Type ${ac.typeCode}` : "Type ?",
-    ac.onGround ? "On ground" : `${Math.round(ac.altFt ?? 0).toLocaleString()} ft`,
-    ac.groundSpeedKt !== undefined ? `${Math.round(ac.groundSpeedKt)} kt` : "",
-    ac.headingDeg !== undefined ? `${Math.round(ac.headingDeg)}\u00b0` : "",
+    a.callsign || a.hex.toUpperCase(),
+    `${operator ?? "—"} · ${CLASS_META[cls].label}`,
+    `Intent: ${intent}${vrTxt}`,
+    a.typeCode ? `Type ${a.typeCode}` : "Type ?",
+    a.onGround ? "On ground" : `${Math.round(track.render.altFt).toLocaleString()} ft`,
+    a.groundSpeedKt !== undefined ? `${Math.round(a.groundSpeedKt)} kt` : "",
+    a.headingDeg !== undefined ? `Hdg ${Math.round(a.headingDeg)}\u00b0` : "",
   ].filter(Boolean);
 
   ctx.font = "12px system-ui, sans-serif";
   const w = Math.max(...lines.map((l) => ctx.measureText(l).width)) + 16;
   const h = lines.length * 16 + 12;
-  let bx = pt.x + 14;
+  let bx = pt.x + nearest.size / 2 + 10;
   let by = pt.y - h / 2;
   bx = Math.min(bx, ctx.canvas.clientWidth - w - 4);
-  by = Math.max(4, by);
+  by = Math.max(4, Math.min(by, ctx.canvas.clientHeight - h - 4));
 
   ctx.fillStyle = "rgba(10, 14, 18, 0.92)";
   ctx.strokeStyle = "rgba(150, 220, 180, 0.5)";
@@ -263,7 +395,6 @@ function drawHover(
   ctx.fill();
   ctx.stroke();
 
-  ctx.fillStyle = "rgba(235, 245, 240, 0.95)";
   ctx.textAlign = "left";
   ctx.textBaseline = "top";
   lines.forEach((line, i) => {

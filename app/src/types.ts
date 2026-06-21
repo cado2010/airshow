@@ -23,4 +23,8 @@ export interface AirShowConfig {
   centerLon: number;
   radiusMiles: number;
   refreshSeconds: number;
+  /** Multiplier applied to altitude-derived aircraft size (declutter). */
+  aircraftScale: number;
+  /** Human-readable label for the current center (preset name, city, Custom). */
+  locationLabel: string;
 }

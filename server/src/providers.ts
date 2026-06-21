@@ -10,7 +10,7 @@ import type { Aircraft } from "./types.js";
  * affect TLS verification anywhere else in the process.
  */
 const insecureTls = process.env.AIRSHOW_INSECURE_TLS !== "0";
-const dispatcher = insecureTls
+export const outboundDispatcher = insecureTls
   ? new Agent({ connect: { rejectUnauthorized: false } })
   : undefined;
 
@@ -69,7 +69,7 @@ async function fetchProvider(
         "User-Agent": "AirShow/0.1 (local ceiling projection app)",
       },
       // `dispatcher` is a Node/undici extension not present in DOM fetch types.
-      ...(dispatcher ? { dispatcher } : {}),
+      ...(outboundDispatcher ? { dispatcher: outboundDispatcher } : {}),
     } as RequestInit);
     if (!res.ok) {
       throw new Error(`HTTP ${res.status}`);

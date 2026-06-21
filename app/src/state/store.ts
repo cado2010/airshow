@@ -10,6 +10,8 @@ const DEFAULT_CONFIG: AirShowConfig = {
   centerLon: -96.6153,
   radiusMiles: 50,
   refreshSeconds: 5,
+  aircraftScale: 0.45,
+  locationLabel: "DFW Area",
 };
 
 function loadConfig(): AirShowConfig {
