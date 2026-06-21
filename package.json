@@ -3,6 +3,8 @@
   "version": "0.1.0",
   "private": true,
   "description": "Real-time aircraft ceiling projection system using free ADS-B data",
+  "author": "AirShow",
+  "main": "electron/main.cjs",
   "workspaces": [
     "app",
     "server"
@@ -11,10 +13,41 @@
     "dev": "concurrently -n server,app -c blue,green \"npm:dev:server\" \"npm:dev:app\"",
     "dev:server": "npm -w server run dev",
     "dev:app": "npm -w app run dev",
-    "build": "npm -w server run build && npm -w app run build"
+    "build": "npm -w server run build && npm -w app run build",
+    "build:electron": "npm -w app run build && node scripts/build-electron.mjs",
+    "dist": "npm run build:electron && electron-builder --win nsis",
+    "dist:dir": "npm run build:electron && electron-builder --win dir",
+    "dist:portable": "npm run build:electron && electron-builder --win portable"
   },
   "devDependencies": {
     "concurrently": "^9.1.2",
+    "electron": "^42.4.1",
+    "electron-builder": "^26.15.3",
+    "esbuild": "^0.28.1",
     "soaring-symbols": "^0.1.0-alpha.10"
+  },
+  "build": {
+    "appId": "com.airshow.app",
+    "productName": "AirShow",
+    "asar": false,
+    "directories": {
+      "output": "release",
+      "app": "."
+    },
+    "files": [
+      "electron/**/*",
+      "app/dist/**/*",
+      "package.json"
+    ],
+    "win": {
+      "target": [
+        "nsis"
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "perMachine": false
+    }
   }
 }

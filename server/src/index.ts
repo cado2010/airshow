@@ -7,15 +7,19 @@ import { outboundDispatcher } from "./providers.js";
 import { lookupRoute } from "./routes.js";
 import type { AircraftResponse } from "./types.js";
 
-const PORT = Number(process.env.PORT ?? 8787);
 const MAX_DIST_NM = 250;
 
-const cache = new AircraftCache();
-const replay = new ReplayBuffer();
-const hub = new StreamHub(cache, replay);
+export interface ServerOptions {
+  /** TCP port to listen on (0 = OS-assigned free port). */
+  port?: number;
+  /** Directory of the built frontend to serve (Electron/standalone builds). */
+  staticDir?: string;
+}
 
-const app = express();
-app.use(cors());
+export interface RunningServer {
+  port: number;
+  close: () => Promise<void>;
+}
 
 function parseQuery(req: express.Request): {
   lat: number;
@@ -29,108 +33,152 @@ function parseQuery(req: express.Request): {
   return { lat, lon, distNm };
 }
 
-app.get("/api/health", (_req, res) => {
-  res.json({ ok: true, replay: replay.span });
-});
+/** Build the Express app (API + optional static frontend) without listening. */
+export function createApp(opts: ServerOptions = {}): express.Express {
+  const cache = new AircraftCache();
+  const replay = new ReplayBuffer();
+  const hub = new StreamHub(cache, replay);
 
-/** Approximate location from public IP (fallback when browser geo fails). */
-app.get("/api/geolocate", async (_req, res) => {
-  try {
-    const r = await fetch(
-      "http://ip-api.com/json/?fields=status,message,lat,lon,city,regionName",
-      {
-        headers: { "User-Agent": "AirShow/0.1" },
-        ...(outboundDispatcher ? { dispatcher: outboundDispatcher } : {}),
-      } as RequestInit,
-    );
-    const d = (await r.json()) as {
-      status?: string;
-      message?: string;
-      lat?: number;
-      lon?: number;
-      city?: string;
-      regionName?: string;
-    };
-    if (d.status !== "success" || typeof d.lat !== "number") {
-      throw new Error(d.message || "IP lookup failed");
+  const app = express();
+  app.use(cors());
+
+  app.get("/api/health", (_req, res) => {
+    res.json({ ok: true, replay: replay.span });
+  });
+
+  // Approximate location from public IP (fallback when browser geo fails).
+  app.get("/api/geolocate", async (_req, res) => {
+    try {
+      const r = await fetch(
+        "http://ip-api.com/json/?fields=status,message,lat,lon,city,regionName",
+        {
+          headers: { "User-Agent": "AirShow/0.1" },
+          ...(outboundDispatcher ? { dispatcher: outboundDispatcher } : {}),
+        } as RequestInit,
+      );
+      const d = (await r.json()) as {
+        status?: string;
+        message?: string;
+        lat?: number;
+        lon?: number;
+        city?: string;
+        regionName?: string;
+      };
+      if (d.status !== "success" || typeof d.lat !== "number") {
+        throw new Error(d.message || "IP lookup failed");
+      }
+      res.json({
+        lat: d.lat,
+        lon: d.lon,
+        label:
+          [d.city, d.regionName].filter(Boolean).join(", ") ||
+          "Current location",
+      });
+    } catch (err) {
+      res.status(502).json({
+        error: err instanceof Error ? err.message : String(err),
+      });
     }
-    res.json({
-      lat: d.lat,
-      lon: d.lon,
-      label:
-        [d.city, d.regionName].filter(Boolean).join(", ") || "Current location",
-    });
-  } catch (err) {
-    res.status(502).json({
-      error: err instanceof Error ? err.message : String(err),
-    });
-  }
-});
+  });
 
-/** Flight origin/destination by callsign (cached). 204 when unknown. */
-app.get("/api/route", async (req, res) => {
-  const callsign = typeof req.query.callsign === "string" ? req.query.callsign : "";
-  if (!callsign.trim()) {
-    res.status(400).json({ error: "callsign is required" });
-    return;
-  }
-  try {
-    const route = await lookupRoute(callsign);
-    if (!route) {
-      res.status(204).end();
+  // Flight origin/destination by callsign (cached). 204 when unknown.
+  app.get("/api/route", async (req, res) => {
+    const callsign =
+      typeof req.query.callsign === "string" ? req.query.callsign : "";
+    if (!callsign.trim()) {
+      res.status(400).json({ error: "callsign is required" });
       return;
     }
-    res.json(route);
-  } catch (err) {
-    res.status(502).json({ error: err instanceof Error ? err.message : String(err) });
-  }
-});
-
-/** Server-Sent Events stream: full snapshot on connect, then deltas. */
-app.get("/api/stream", (req, res) => {
-  const query = parseQuery(req);
-  if (!query) {
-    res.status(400).json({ error: "lat, lon and dist (nm, > 0) are required" });
-    return;
-  }
-
-  res.writeHead(200, {
-    "Content-Type": "text/event-stream",
-    "Cache-Control": "no-cache, no-transform",
-    Connection: "keep-alive",
-    "X-Accel-Buffering": "no",
+    try {
+      const route = await lookupRoute(callsign);
+      if (!route) {
+        res.status(204).end();
+        return;
+      }
+      res.json(route);
+    } catch (err) {
+      res
+        .status(502)
+        .json({ error: err instanceof Error ? err.message : String(err) });
+    }
   });
-  res.flushHeaders?.();
-  res.write("retry: 2000\n\n");
 
-  const unsubscribe = hub.addClient(query, res);
-  req.on("close", unsubscribe);
-});
+  // Server-Sent Events stream: full snapshot on connect, then deltas.
+  app.get("/api/stream", (req, res) => {
+    const query = parseQuery(req);
+    if (!query) {
+      res
+        .status(400)
+        .json({ error: "lat, lon and dist (nm, > 0) are required" });
+      return;
+    }
 
-app.get("/api/aircraft", async (req, res) => {
-  const query = parseQuery(req);
-  if (!query) {
-    res
-      .status(400)
-      .json({ error: "lat, lon and dist (nm, > 0) query params are required" });
-    return;
+    res.writeHead(200, {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache, no-transform",
+      Connection: "keep-alive",
+      "X-Accel-Buffering": "no",
+    });
+    res.flushHeaders?.();
+    res.write("retry: 2000\n\n");
+
+    const unsubscribe = hub.addClient(query, res);
+    req.on("close", unsubscribe);
+  });
+
+  app.get("/api/aircraft", async (req, res) => {
+    const query = parseQuery(req);
+    if (!query) {
+      res
+        .status(400)
+        .json({ error: "lat, lon and dist (nm, > 0) query params are required" });
+      return;
+    }
+
+    try {
+      const result = await cache.get(query);
+      const payload: AircraftResponse = {
+        now: result.at,
+        source: result.cached ? `${result.source} (cache)` : result.source,
+        cached: result.cached,
+        aircraft: result.aircraft,
+      };
+      res.json(payload);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      res.status(502).json({ error: msg });
+    }
+  });
+
+  // Serve the built frontend (Electron/standalone). In dev this is unset and
+  // Vite serves the UI instead.
+  if (opts.staticDir) {
+    app.use(express.static(opts.staticDir));
   }
 
-  try {
-    const result = await cache.get(query);
-    const payload: AircraftResponse = {
-      now: result.at,
-      source: result.cached ? `${result.source} (cache)` : result.source,
-      cached: result.cached,
-      aircraft: result.aircraft,
-    };
-    res.json(payload);
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    res.status(502).json({ error: msg });
-  }
-});
+  return app;
+}
 
-app.listen(PORT, () => {
-  console.log(`[airshow] proxy listening on http://localhost:${PORT}`);
-});
+/** Build and start the server, resolving once it is listening. */
+export function startServer(opts: ServerOptions = {}): Promise<RunningServer> {
+  const app = createApp(opts);
+  const requestedPort =
+    opts.port ?? Number(process.env.PORT ?? 8787);
+
+  return new Promise((resolve, reject) => {
+    const server = app.listen(requestedPort, () => {
+      const addr = server.address();
+      const port =
+        typeof addr === "object" && addr ? addr.port : requestedPort;
+      console.log(`[airshow] proxy listening on http://localhost:${port}`);
+      resolve({
+        port,
+        close: () =>
+          new Promise<void>((res, rej) =>
+            server.close((err) => (err ? rej(err) : res())),
+          ),
+      });
+    });
+    server.on("error", reject);
+  });
+}
