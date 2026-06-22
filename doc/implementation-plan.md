@@ -192,6 +192,49 @@ trajectory override of the observed end. Popup shows `Route: FROM → TO (low|hi
 honoring the city-names toggle (ICAO codes resolved to cities via the airport
 index).
 
+### Proximity / loss-of-separation alerts — **implemented (v0.5)**
+
+Highlights aircraft that get uncomfortably close to each other with a red
+translucent "danger cloud" and a dashed link between the pair, until they
+separate again. Thresholds are configurable.
+
+- **Two-dimensional rule.** Aviation separation is judged on two independent
+  axes, so a conflict requires **both** to be breached at once:
+  `horizontalDist < conflictHorizNm` **AND** `verticalDist < conflictVertFt`.
+  A jet 2,000 ft directly above another is *not* flagged. **Thresholds are set
+  below ATC separation minima, not at them**: the minima (3 NM / 1000 ft) are the
+  *normal required spacing*, so alerting at them flags ordinary dense traffic.
+  Defaults target a genuine close call (~TCAS RA): **1 NM horizontal, 700 ft
+  vertical** (configurable; horizontal 0.5–10 NM, vertical 200–2,000 ft). Note
+  radius elsewhere in the UI is statute miles, but separation is conventionally
+  nautical miles.
+- **Performance — never per frame.** The pairwise scan
+  (`TrackManager.detectConflicts`) runs **~1×/sec** off the data tick, decoupled
+  from the 60 fps redraw; the render loop only reads a `conflict` boolean per
+  track, so it adds no per-frame cost. The scan is O(n²) but with cheap
+  vertical + lat/lon **bounding-box early-outs**, and n in a 30 mi radius is
+  typically 50–150 (≤~250 worst case → ~31k trivial pair checks). A uniform
+  spatial grid is the next step only if n routinely grows much larger.
+- **Hysteresis.** A flagged pair stays flagged until separation grows past
+  **1.2×** the threshold, preventing flicker at the boundary (previous-tick
+  pairs are remembered in `prevPairs`).
+- **Terminal-airspace rule (tighter near airports).** Aircraft on approach
+  legitimately fly much closer (in-trail ~2.5–3 NM, parallel runways < 1 NM), so
+  instead of suppressing alerts near airports we apply a **tighter** minimum
+  there — loss of separation still exists, just at smaller numbers. When **both**
+  aircraft are low (< 10,000 ft) and within ~10 NM of an airport (from
+  `airports.json` via `airportsInView`), the thresholds switch to the tighter
+  terminal values (defaults **0.5 NM / 400 ft**, configurable). En-route vs.
+  terminal pairs keep the en-route default. Toggle: `conflictTighterNearAirport`.
+- **Filtering.** Only airborne aircraft with a known barometric altitude are
+  considered (on-ground aircraft taxi within meters and would be 100% red).
+- **Rendering.** A pulsing red radial-gradient cloud is drawn under the
+  silhouette; conflicting pairs are joined by an animated dashed red line; the
+  hover popup shows a "⚠ Proximity alert" line.
+- **Caveat.** This is a **visualization, not a safety tool** — positions are
+  interpolated and legal close spacing (in-trail / parallel approaches near a
+  hub) will legitimately trigger it.
+
 ### Phase 6 — Mobile apps (Android + iOS)
 
 > Status: **design only** (this section). No code yet. Goal: ship native

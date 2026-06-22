@@ -23,8 +23,10 @@ export default function App() {
         AirShow <span className="phase">live ceiling radar</span>
         {version && <span className="version">{version}</span>}
       </header>
-      <StatusBar />
-      <FullscreenButton />
+      <div className="bottom-bar">
+        <StatusBar />
+        <FullscreenButton />
+      </div>
       <ConfigPanel />
     </div>
   );

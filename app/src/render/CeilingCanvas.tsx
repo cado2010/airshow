@@ -16,6 +16,7 @@ import { getRoute, type RouteAirport } from "../identity/routes";
 import { getOpenSky } from "../identity/opensky";
 import {
   airportByCode,
+  airportsInView,
   airportsReady,
   loadAirports,
   type Airport,
@@ -166,6 +167,7 @@ export function CeilingCanvas() {
   const tmRef = useRef<TrackManager>(new TrackManager());
   const plottedRef = useRef<Plotted[]>([]);
   const mouseRef = useRef<{ x: number; y: number } | null>(null);
+  const lastConflictRef = useRef(0);
 
   configRef.current = config;
 
@@ -232,7 +234,33 @@ export function CeilingCanvas() {
       });
 
       const tracks = tmRef.current.frame(now);
+
+      // Proximity/loss-of-separation scan runs ~1×/sec (positions only change at
+      // the feed rate), decoupled from the 60fps redraw so it can never add per-
+      // frame cost. Tracks just carry a `conflict` flag the render loop reads.
+      if (now - lastConflictRef.current > 1000) {
+        lastConflictRef.current = now;
+        // In-view airports power the tighter terminal-airspace rule; load lazily.
+        if (cfg.conflictTighterNearAirport && !airportsReady()) void loadAirports();
+        const airports =
+          cfg.conflictTighterNearAirport && airportsReady()
+            ? airportsInView(cfg.centerLat, cfg.centerLon, cfg.radiusMiles * 0.868976 + 15)
+            : [];
+        tmRef.current.detectConflicts({
+          enabled: cfg.conflictEnabled,
+          horizNm: cfg.conflictHorizNm,
+          vertFt: cfg.conflictVertFt,
+          tighterNearAirport: cfg.conflictTighterNearAirport,
+          nearHorizNm: cfg.conflictNearHorizNm,
+          nearVertFt: cfg.conflictNearVertFt,
+          airports,
+          terminalRadiusNm: 10,
+          terminalMaxAltFt: 10000,
+        });
+      }
+
       const plotted: Plotted[] = [];
+      const byHex = new Map<string, Plotted>();
 
       for (const track of tracks) {
         if (cfg.hideGround && track.data.onGround) continue;
@@ -249,6 +277,7 @@ export function CeilingCanvas() {
 
         drawTrail(ctx, track, px, py, color);
         if (r.altFt > 30000) drawContrail(ctx, track, px, py);
+        if (track.conflict) drawConflictCloud(ctx, pt, size, now);
 
         // Silhouette (rotated to heading)
         ctx.save();
@@ -261,8 +290,12 @@ export function CeilingCanvas() {
         drawLogo(ctx, operator, pt, size, cfg.logoOffset, cfg.logoScale);
         if (track.isNew) drawSpotterPulse(ctx, track, pt, size, now);
 
-        plotted.push({ track, pt, size, cls, operator });
+        const p: Plotted = { track, pt, size, cls, operator };
+        plotted.push(p);
+        byHex.set(track.data.hex, p);
       }
+
+      drawConflictLinks(ctx, plotted, byHex, now);
 
       plottedRef.current = plotted;
       drawHover(ctx, plotted, mouseRef.current, cfg);
@@ -385,6 +418,53 @@ function drawSpotterPulse(
   ctx.beginPath();
   ctx.arc(pt.x, pt.y, radius, 0, Math.PI * 2);
   ctx.stroke();
+}
+
+// Soft red "danger" cloud drawn under an aircraft that has lost separation.
+// Gently pulses so it reads as an active alert without distracting hard edges.
+function drawConflictCloud(
+  ctx: CanvasRenderingContext2D,
+  pt: ScreenPoint,
+  size: number,
+  now: number,
+): void {
+  const pulse = 0.85 + 0.15 * Math.sin(now / 300);
+  const radius = Math.max(26, size * 1.7) * pulse;
+  const g = ctx.createRadialGradient(pt.x, pt.y, radius * 0.2, pt.x, pt.y, radius);
+  g.addColorStop(0, "rgba(255, 50, 50, 0.34)");
+  g.addColorStop(0.6, "rgba(255, 40, 40, 0.16)");
+  g.addColorStop(1, "rgba(255, 30, 30, 0)");
+  ctx.fillStyle = g;
+  ctx.beginPath();
+  ctx.arc(pt.x, pt.y, radius, 0, Math.PI * 2);
+  ctx.fill();
+}
+
+// Thin link between each conflicting pair (drawn once per pair).
+function drawConflictLinks(
+  ctx: CanvasRenderingContext2D,
+  plotted: Plotted[],
+  byHex: Map<string, Plotted>,
+  now: number,
+): void {
+  ctx.save();
+  ctx.lineWidth = 1.2;
+  ctx.setLineDash([5, 4]);
+  ctx.lineDashOffset = -(now / 60) % 9;
+  ctx.strokeStyle = "rgba(255, 90, 90, 0.55)";
+  for (const p of plotted) {
+    const partnerHex = p.track.conflictPartner;
+    if (!partnerHex) continue;
+    // Draw once: only from the lexicographically smaller hex.
+    if (p.track.data.hex > partnerHex) continue;
+    const q = byHex.get(partnerHex);
+    if (!q) continue;
+    ctx.beginPath();
+    ctx.moveTo(p.pt.x, p.pt.y);
+    ctx.lineTo(q.pt.x, q.pt.y);
+    ctx.stroke();
+  }
+  ctx.restore();
 }
 
 function drawRadarOverlay(
@@ -515,6 +595,7 @@ function drawHover(
     a.onGround ? "On ground" : `${Math.round(track.render.altFt).toLocaleString()} ft`,
     a.groundSpeedKt !== undefined ? `${Math.round(a.groundSpeedKt)} kt` : "",
     a.headingDeg !== undefined ? `Hdg ${Math.round(a.headingDeg)}\u00b0` : "",
+    track.conflict ? "\u26a0 Proximity alert" : "",
   ].filter(Boolean);
 
   ctx.font = "12px system-ui, sans-serif";

@@ -58,10 +58,18 @@ body,
   letter-spacing: 0.02em;
 }
 
-.status-bar {
+.bottom-bar {
   position: absolute;
   bottom: 14px;
   left: 16px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  max-width: calc(100vw - 32px);
+}
+
+.status-bar {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -104,10 +112,10 @@ body,
 }
 
 .fullscreen-btn {
-  position: absolute;
-  bottom: 14px;
-  right: 16px;
   font-size: 13px;
+  padding: 6px 12px;
+  border-radius: 8px;
+  cursor: pointer;
   background: rgba(8, 12, 14, 0.6);
   border: 1px solid rgba(150, 220, 180, 0.18);
   color: rgba(220, 235, 228, 0.9);

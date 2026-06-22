@@ -16,6 +16,15 @@ const DEFAULT_CONFIG: AirShowConfig = {
   logoOffset: 0.8,
   logoScale: 1.0,
   routeCityNames: true,
+  // Thresholds are deliberately well BELOW ATC separation minima (3 NM / 1000 ft):
+  // those minima are normal required spacing, so alerting at them flags ordinary
+  // traffic. These values target a genuine close call (~TCAS RA territory).
+  conflictEnabled: true,
+  conflictHorizNm: 1,
+  conflictVertFt: 700,
+  conflictTighterNearAirport: true,
+  conflictNearHorizNm: 0.5,
+  conflictNearVertFt: 400,
 };
 
 function loadConfig(): AirShowConfig {

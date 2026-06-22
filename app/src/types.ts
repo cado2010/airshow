@@ -35,4 +35,16 @@ export interface AirShowConfig {
   logoScale: number;
   /** Show city names instead of airport codes in the route line. */
   routeCityNames: boolean;
+  /** Highlight aircraft that lose separation from each other (proximity alert). */
+  conflictEnabled: boolean;
+  /** Horizontal separation threshold, nautical miles (both must be breached). */
+  conflictHorizNm: number;
+  /** Vertical separation threshold, feet (both must be breached). */
+  conflictVertFt: number;
+  /** Use a tighter threshold when both aircraft are in terminal (near-airport) airspace. */
+  conflictTighterNearAirport: boolean;
+  /** Terminal-airspace horizontal threshold, nautical miles. */
+  conflictNearHorizNm: number;
+  /** Terminal-airspace vertical threshold, feet. */
+  conflictNearVertFt: number;
 }

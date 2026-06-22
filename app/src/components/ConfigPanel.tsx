@@ -287,6 +287,90 @@ export function ConfigPanel() {
         Show city names in route
       </label>
 
+      <label className="config-check">
+        <input
+          type="checkbox"
+          checked={config.conflictEnabled}
+          onChange={(e) => update({ conflictEnabled: e.target.checked })}
+        />
+        Proximity alerts (loss of separation)
+      </label>
+
+      {config.conflictEnabled && (
+        <>
+          <label>
+            Horizontal separation · {config.conflictHorizNm} NM
+            <input
+              type="range"
+              min={0.5}
+              max={10}
+              step={0.5}
+              value={config.conflictHorizNm}
+              onChange={(e) =>
+                update({ conflictHorizNm: Number(e.target.value) })
+              }
+            />
+          </label>
+
+          <label>
+            Vertical separation · {config.conflictVertFt} ft
+            <input
+              type="range"
+              min={200}
+              max={2000}
+              step={100}
+              value={config.conflictVertFt}
+              onChange={(e) =>
+                update({ conflictVertFt: Number(e.target.value) })
+              }
+            />
+          </label>
+
+          <label className="config-check">
+            <input
+              type="checkbox"
+              checked={config.conflictTighterNearAirport}
+              onChange={(e) =>
+                update({ conflictTighterNearAirport: e.target.checked })
+              }
+            />
+            Tighter threshold near airports
+          </label>
+
+          {config.conflictTighterNearAirport && (
+            <>
+              <label>
+                Terminal horizontal · {config.conflictNearHorizNm} NM
+                <input
+                  type="range"
+                  min={0.3}
+                  max={3}
+                  step={0.1}
+                  value={config.conflictNearHorizNm}
+                  onChange={(e) =>
+                    update({ conflictNearHorizNm: Number(e.target.value) })
+                  }
+                />
+              </label>
+
+              <label>
+                Terminal vertical · {config.conflictNearVertFt} ft
+                <input
+                  type="range"
+                  min={100}
+                  max={1000}
+                  step={50}
+                  value={config.conflictNearVertFt}
+                  onChange={(e) =>
+                    update({ conflictNearVertFt: Number(e.target.value) })
+                  }
+                />
+              </label>
+            </>
+          )}
+        </>
+      )}
+
       <button
         className="config-refresh"
         onClick={() => window.location.reload()}
