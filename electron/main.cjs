@@ -24,7 +24,9 @@ async function boot() {
   // (otherwise Windows draws a white frame in light system themes), and drop
   // the default menu bar so the window reads like Cursor's agent window.
   nativeTheme.themeSource = "dark";
-  Menu.setApplicationMenu(null);
+  // On Windows/Linux drop the menu bar entirely (Cursor-like). On macOS keep the
+  // standard application menu so Cmd+Q / copy-paste / window shortcuts work.
+  if (process.platform !== "darwin") Menu.setApplicationMenu(null);
 
   let url = DEV_URL;
 

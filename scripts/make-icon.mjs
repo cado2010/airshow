@@ -1,7 +1,10 @@
-// Turns the generated landscape art into a square, multi-resolution Windows
-// .ico used as the app/installer icon. Source -> build/icon.ico (+ icon.png).
+// Turns the generated landscape art into square, multi-resolution app icons:
+//   - build/icon.ico  (Windows)
+//   - build/icon.icns (macOS)
+//   - build/icon.png   (512px master, used as a fallback)
 import sharp from "sharp";
 import pngToIco from "png-to-ico";
+import { Icns, IcnsImage } from "@fiahfy/icns";
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -42,5 +45,26 @@ const pngs = await Promise.all(
 
 const ico = await pngToIco(pngs);
 await writeFile(join(buildDir, "icon.ico"), ico);
-
 console.log(`build/icon.ico written (${(ico.length / 1024).toFixed(1)} KB)`);
+
+// 3) macOS .icns — one PNG per supported OSType (osType -> required pixel size).
+const icnsTypes = [
+  ["ic11", 32],
+  ["ic12", 64],
+  ["ic07", 128],
+  ["ic13", 256],
+  ["ic08", 256],
+  ["ic14", 512],
+  ["ic09", 512],
+  ["ic10", 1024],
+];
+const icns = new Icns();
+for (const [osType, size] of icnsTypes) {
+  const buf = await sharp(squarePng)
+    .resize(size, size, { fit: "contain", background: { r: 0, g: 0, b: 0, alpha: 0 } })
+    .png()
+    .toBuffer();
+  icns.append(IcnsImage.fromPNG(buf, osType));
+}
+await writeFile(join(buildDir, "icon.icns"), icns.data);
+console.log(`build/icon.icns written (${(icns.data.length / 1024).toFixed(1)} KB)`);
