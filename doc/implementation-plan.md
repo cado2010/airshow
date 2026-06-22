@@ -155,6 +155,43 @@ code, airport name, or city** — fully offline, no geocoding service.
 > (Open-Meteo recommended) with server-side caching — see the location-search
 > strategy. Not required for Layer 1.
 
+### Route accuracy — hybrid origin/destination — **implemented**
+
+adsbdb only knows a flight number's *scheduled* route, which is often wrong for
+the leg you're watching (codeshares, repositioning, intermediate stops). We now
+reconcile **three non-blocking sources** in the aircraft popup and label
+confidence. Critically, the render loop only ever does **synchronous cache
+reads** — no source is ever awaited during a frame, so route resolution can
+never introduce rendering lag.
+
+- **adsbdb scheduled route** (`/api/route`): shown immediately as the baseline →
+  **confidence: low**.
+- **OpenSky track-derived leg** (`server/src/opensky.ts` → `/api/opensky`):
+  OAuth2 client-credentials against the free OpenSky API, `flights/aircraft` by
+  `icao24` over the last 18h, returns the observed `estDeparture/ArrivalAirport`
+  for the most recent leg. Token + per-aircraft results are cached server-side
+  (10 min positive / 5 min negative, de-duplicated in-flight). The client
+  (`app/src/identity/opensky.ts`) mirrors the `getRoute` pattern: a synchronous
+  getter returns the cached value (or `undefined` while a background fetch runs)
+  and never blocks. When it resolves it overrides the relevant end →
+  **confidence: high**. Credentials live in `server/creds/opensky_credentials.json`
+  (git-ignored, bundled into the local build via `electron-builder` `files`); env
+  vars `OPENSKY_CLIENT_ID/SECRET` take precedence. Resolves `__dirname` (bundle)
+  or `cwd` (dev) so it works both packaged and in dev.
+- **Trajectory inference** (`app/src/identity/arrivals.ts`): authoritative for
+  the *near end* — the airport the aircraft is physically demonstrating right
+  now. Pure, cheap heuristic on live ADS-B (altitude < 12k ft, vertical rate,
+  heading vs. bearing to field) scanning only a **memoized in-view airport set**
+  (`airportsInView` in `airports.ts`, a few dozen entries, never the full 72k per
+  frame). A descending aircraft pointed at a nearby field → arrival there; a
+  climbing aircraft moving away → departure from there. This fixes the original
+  symptom (flights clearly landing at DFW showing a different airport).
+
+Reconciliation order each frame (all sync): adsbdb baseline → OpenSky override →
+trajectory override of the observed end. Popup shows `Route: FROM → TO (low|high)`,
+honoring the city-names toggle (ICAO codes resolved to cities via the airport
+index).
+
 ### Phase 6 — Mobile apps (Android + iOS)
 
 > Status: **design only** (this section). No code yet. Goal: ship native

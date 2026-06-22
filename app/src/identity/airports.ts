@@ -27,6 +27,7 @@ type Row = [
 
 let data: Airport[] | null = null;
 let loading: Promise<void> | null = null;
+const byCode = new Map<string, Airport>();
 
 /** Fetch + decode the dataset once. Safe to call repeatedly. */
 export function loadAirports(): Promise<void> {
@@ -45,6 +46,10 @@ export function loadAirports(): Promise<void> {
           lon: r[6],
           importance: r[7],
         }));
+        for (const a of data) {
+          if (a.icao && !byCode.has(a.icao)) byCode.set(a.icao, a);
+          if (a.iata && !byCode.has(a.iata)) byCode.set(a.iata, a);
+        }
       })
       .catch(() => {
         data = [];
@@ -55,6 +60,47 @@ export function loadAirports(): Promise<void> {
 
 export function airportsReady(): boolean {
   return data !== null;
+}
+
+/** Look up an airport by ICAO or IATA code (uppercased). */
+export function airportByCode(code?: string | null): Airport | undefined {
+  if (!code) return undefined;
+  return byCode.get(code.trim().toUpperCase());
+}
+
+// Memoized "airports near the viewed area" set so per-frame trajectory
+// inference scans only a few dozen candidates, never the full 72k dataset.
+let viewKey = "";
+let viewSet: Airport[] = [];
+
+/**
+ * Airports within `radiusNm` (+ margin) of a center, limited to real airports
+ * (importance >= 2) for arrival/departure inference. Recomputed only when the
+ * center/radius changes.
+ */
+export function airportsInView(
+  centerLat: number,
+  centerLon: number,
+  radiusNm: number,
+): Airport[] {
+  if (!data) return [];
+  const key = `${centerLat.toFixed(3)},${centerLon.toFixed(3)},${Math.round(radiusNm)}`;
+  if (key === viewKey) return viewSet;
+
+  const degLat = radiusNm / 60; // 1° lat ≈ 60 nm
+  const cosLat = Math.cos((centerLat * Math.PI) / 180) || 1;
+  const degLon = radiusNm / (60 * cosLat);
+
+  const out: Airport[] = [];
+  for (const a of data) {
+    if (a.importance < 2) continue;
+    if (Math.abs(a.lat - centerLat) > degLat) continue;
+    if (Math.abs(a.lon - centerLon) > degLon) continue;
+    out.push(a);
+  }
+  viewKey = key;
+  viewSet = out;
+  return out;
 }
 
 /**

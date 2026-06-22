@@ -5,6 +5,7 @@ import { ReplayBuffer } from "./replayBuffer.js";
 import { StreamHub } from "./stream.js";
 import { outboundDispatcher } from "./providers.js";
 import { lookupRoute } from "./routes.js";
+import { lookupOpenSky, openSkyEnabled } from "./opensky.js";
 import type { AircraftResponse } from "./types.js";
 
 const MAX_DIST_NM = 250;
@@ -91,6 +92,32 @@ export function createApp(opts: ServerOptions = {}): express.Express {
     }
     try {
       const route = await lookupRoute(callsign);
+      if (!route) {
+        res.status(204).end();
+        return;
+      }
+      res.json(route);
+    } catch (err) {
+      res
+        .status(502)
+        .json({ error: err instanceof Error ? err.message : String(err) });
+    }
+  });
+
+  // Track-derived origin/destination by icao24 (OpenSky). 204 when unknown or
+  // the feature is disabled (no credentials).
+  app.get("/api/opensky", async (req, res) => {
+    if (!openSkyEnabled) {
+      res.status(204).end();
+      return;
+    }
+    const icao24 = typeof req.query.icao24 === "string" ? req.query.icao24 : "";
+    if (!icao24.trim()) {
+      res.status(400).json({ error: "icao24 is required" });
+      return;
+    }
+    try {
+      const route = await lookupOpenSky(icao24);
       if (!route) {
         res.status(204).end();
         return;

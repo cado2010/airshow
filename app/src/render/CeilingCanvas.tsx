@@ -12,7 +12,15 @@ import {
   airlineName,
   loadLogoManifest,
 } from "../identity/airlines";
-import { getRoute, airportCode, airportCity } from "../identity/routes";
+import { getRoute, type RouteAirport } from "../identity/routes";
+import { getOpenSky } from "../identity/opensky";
+import {
+  airportByCode,
+  airportsReady,
+  loadAirports,
+  type Airport,
+} from "../identity/airports";
+import { inferEndpoint } from "../identity/arrivals";
 import type { AirShowConfig } from "../types";
 
 const OVERLAY = "rgba(120, 200, 160, 0.16)";
@@ -68,16 +76,85 @@ function intentFor(onGround: boolean, altFt: number, vrate: number): string {
   return "Level flight";
 }
 
-/** Popup route line: "Route: ORIG → DEST", "Route: …" while loading, or "". */
-function routeLine(callsign: string | undefined, cityNames: boolean): string {
-  const route = getRoute(callsign);
-  if (route === undefined) return "Route: \u2026";
-  if (route === null) return "";
-  const pick = cityNames ? airportCity : airportCode;
-  const from = pick(route.origin);
-  const to = pick(route.destination);
-  if (!from && !to) return "";
-  return `Route: ${from ?? "?"} \u2192 ${to ?? "?"}`;
+type Endpoint = { code: string; city: string } | null;
+
+function epFromAirport(a: Airport): Endpoint {
+  return { code: a.iata || a.icao || "?", city: a.city || a.name || a.icao || "?" };
+}
+function epFromRouteAirport(ra?: RouteAirport): Endpoint {
+  if (!ra) return null;
+  const code = ra.iata || ra.icao || ra.municipality;
+  if (!code) return null;
+  return { code, city: ra.municipality || code };
+}
+function epFromIcao(icao: string | null): Endpoint {
+  if (!icao) return null;
+  const a = airportByCode(icao);
+  return a ? epFromAirport(a) : { code: icao, city: icao };
+}
+function epText(ep: Endpoint, cityNames: boolean): string {
+  if (!ep) return "?";
+  return cityNames ? ep.city : ep.code;
+}
+
+/**
+ * Resolve a flight's origin/destination from three non-blocking sources and
+ * report confidence. Order of trust, all read synchronously every frame:
+ *   1. adsbdb scheduled route (shown immediately → low confidence)
+ *   2. OpenSky track-derived leg by icao24 (background → upgrades to high)
+ *   3. trajectory-observed near-end (authoritative for arrival/departure here)
+ */
+function resolveRoute(track: Track, cfg: AirShowConfig): string {
+  const a = track.data;
+
+  // Lazy-load the airport set so later hovers can do trajectory inference.
+  if (!airportsReady()) void loadAirports();
+  const viewNm = cfg.radiusMiles * 0.868976;
+  const observed = airportsReady()
+    ? inferEndpoint(
+        {
+          lat: a.lat,
+          lon: a.lon,
+          altFt: a.altFt ?? track.render.altFt,
+          verticalRateFpm: a.verticalRateFpm ?? 0,
+          headingDeg: a.headingDeg,
+          onGround: a.onGround,
+        },
+        cfg.centerLat,
+        cfg.centerLon,
+        viewNm,
+      )
+    : null;
+
+  const adsb = getRoute(a.callsign); // undefined=loading | null=none | route
+  const osky = getOpenSky(a.hex); // undefined=loading | null=none | route
+
+  let from: Endpoint = null;
+  let to: Endpoint = null;
+
+  if (adsb) {
+    from = epFromRouteAirport(adsb.origin);
+    to = epFromRouteAirport(adsb.destination);
+  }
+
+  const oskyData = osky && (osky.depIcao || osky.arrIcao) ? osky : null;
+  if (oskyData) {
+    if (oskyData.depIcao) from = epFromIcao(oskyData.depIcao);
+    if (oskyData.arrIcao) to = epFromIcao(oskyData.arrIcao);
+  }
+
+  if (observed) {
+    if (observed.kind === "arrival") to = epFromAirport(observed.airport);
+    else from = epFromAirport(observed.airport);
+  }
+
+  if (!from && !to) {
+    return adsb === undefined || osky === undefined ? "Route: \u2026" : "";
+  }
+
+  const conf = oskyData || observed ? "high" : "low";
+  const cn = cfg.routeCityNames;
+  return `Route: ${epText(from, cn)} \u2192 ${epText(to, cn)} (${conf})`;
 }
 
 export function CeilingCanvas() {
@@ -188,7 +265,7 @@ export function CeilingCanvas() {
       }
 
       plottedRef.current = plotted;
-      drawHover(ctx, plotted, mouseRef.current, cfg.routeCityNames);
+      drawHover(ctx, plotted, mouseRef.current, cfg);
 
       raf = requestAnimationFrame(draw);
     };
@@ -396,7 +473,7 @@ function drawHover(
   ctx: CanvasRenderingContext2D,
   plotted: Plotted[],
   mouse: { x: number; y: number } | null,
-  cityNames: boolean,
+  cfg: AirShowConfig,
 ): void {
   if (!mouse) return;
   let nearest: Plotted | null = null;
@@ -432,7 +509,7 @@ function drawHover(
   const lines = [
     a.callsign || a.hex.toUpperCase(),
     operatorLine,
-    routeLine(a.callsign, cityNames),
+    resolveRoute(track, cfg),
     `Intent: ${intent}${vrTxt}`,
     a.typeCode ? `Type ${a.typeCode}` : "Type ?",
     a.onGround ? "On ground" : `${Math.round(track.render.altFt).toLocaleString()} ft`,

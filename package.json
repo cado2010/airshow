@@ -1,6 +1,6 @@
 {
   "name": "airshow",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "private": true,
   "description": "Real-time aircraft ceiling projection system using free ADS-B data",
   "author": "AirShow",
@@ -43,6 +43,7 @@
     "files": [
       "electron/**/*",
       "app/dist/**/*",
+      "server/creds/**/*",
       "package.json"
     ],
     "win": {

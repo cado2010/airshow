@@ -11,3 +11,6 @@ server/dist/
 release/
 electron/server.cjs
 build/
+
+# Secrets (OpenSky OAuth client credentials) — bundled into the local build but never committed
+server/creds/
