@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useStore } from "../state/store";
 import { PlanarProjection, type Viewport, type ScreenPoint } from "../geo/projection";
 import { milesToMeters } from "../geo/geo";
@@ -12,16 +12,11 @@ import {
   airlineName,
   loadLogoManifest,
 } from "../identity/airlines";
-import { getRoute, type RouteAirport } from "../identity/routes";
-import { getOpenSky } from "../identity/opensky";
-import {
-  airportByCode,
-  airportsInView,
-  airportsReady,
-  loadAirports,
-  type Airport,
-} from "../identity/airports";
-import { inferEndpoint } from "../identity/arrivals";
+import { airportsInView, airportsReady, loadAirports } from "../identity/airports";
+import { resolveRouteLine } from "../identity/routeResolve";
+import { intentFor } from "../identity/intent";
+import { ShowcaseController } from "../showcase/ShowcaseController";
+import { ShowcaseCard } from "../components/ShowcaseCard";
 import type { AirShowConfig } from "../types";
 
 const OVERLAY = "rgba(120, 200, 160, 0.16)";
@@ -66,98 +61,6 @@ function alphaForAlt(alt: number): number {
   return lerp(1, 0.72, alt / 45000);
 }
 
-/** Infer a phase-of-flight from altitude and vertical rate. */
-function intentFor(onGround: boolean, altFt: number, vrate: number): string {
-  if (onGround) return "On ground";
-  if (vrate >= 500 && altFt < 8000) return "Taking off";
-  if (vrate >= 300) return "Climbing";
-  if (vrate <= -500 && altFt < 8000) return "Landing";
-  if (vrate <= -300) return "Descending";
-  if (altFt >= 18000) return "Cruising";
-  return "Level flight";
-}
-
-type Endpoint = { code: string; city: string } | null;
-
-function epFromAirport(a: Airport): Endpoint {
-  return { code: a.iata || a.icao || "?", city: a.city || a.name || a.icao || "?" };
-}
-function epFromRouteAirport(ra?: RouteAirport): Endpoint {
-  if (!ra) return null;
-  const code = ra.iata || ra.icao || ra.municipality;
-  if (!code) return null;
-  return { code, city: ra.municipality || code };
-}
-function epFromIcao(icao: string | null): Endpoint {
-  if (!icao) return null;
-  const a = airportByCode(icao);
-  return a ? epFromAirport(a) : { code: icao, city: icao };
-}
-function epText(ep: Endpoint, cityNames: boolean): string {
-  if (!ep) return "?";
-  return cityNames ? ep.city : ep.code;
-}
-
-/**
- * Resolve a flight's origin/destination from three non-blocking sources and
- * report confidence. Order of trust, all read synchronously every frame:
- *   1. adsbdb scheduled route (shown immediately → low confidence)
- *   2. OpenSky track-derived leg by icao24 (background → upgrades to high)
- *   3. trajectory-observed near-end (authoritative for arrival/departure here)
- */
-function resolveRoute(track: Track, cfg: AirShowConfig): string {
-  const a = track.data;
-
-  // Lazy-load the airport set so later hovers can do trajectory inference.
-  if (!airportsReady()) void loadAirports();
-  const viewNm = cfg.radiusMiles * 0.868976;
-  const observed = airportsReady()
-    ? inferEndpoint(
-        {
-          lat: a.lat,
-          lon: a.lon,
-          altFt: a.altFt ?? track.render.altFt,
-          verticalRateFpm: a.verticalRateFpm ?? 0,
-          headingDeg: a.headingDeg,
-          onGround: a.onGround,
-        },
-        cfg.centerLat,
-        cfg.centerLon,
-        viewNm,
-      )
-    : null;
-
-  const adsb = getRoute(a.callsign); // undefined=loading | null=none | route
-  const osky = getOpenSky(a.hex); // undefined=loading | null=none | route
-
-  let from: Endpoint = null;
-  let to: Endpoint = null;
-
-  if (adsb) {
-    from = epFromRouteAirport(adsb.origin);
-    to = epFromRouteAirport(adsb.destination);
-  }
-
-  const oskyData = osky && (osky.depIcao || osky.arrIcao) ? osky : null;
-  if (oskyData) {
-    if (oskyData.depIcao) from = epFromIcao(oskyData.depIcao);
-    if (oskyData.arrIcao) to = epFromIcao(oskyData.arrIcao);
-  }
-
-  if (observed) {
-    if (observed.kind === "arrival") to = epFromAirport(observed.airport);
-    else from = epFromAirport(observed.airport);
-  }
-
-  if (!from && !to) {
-    return adsb === undefined || osky === undefined ? "Route: \u2026" : "";
-  }
-
-  const conf = oskyData || observed ? "high" : "low";
-  const cn = cfg.routeCityNames;
-  return `Route: ${epText(from, cn)} \u2192 ${epText(to, cn)} (${conf})`;
-}
-
 export function CeilingCanvas() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const config = useStore((s) => s.config);
@@ -168,6 +71,11 @@ export function CeilingCanvas() {
   const plottedRef = useRef<Plotted[]>([]);
   const mouseRef = useRef<{ x: number; y: number } | null>(null);
   const lastConflictRef = useRef(0);
+  const showcaseRef = useRef<ShowcaseController>(new ShowcaseController());
+  const showcaseAnchorRef = useRef<HTMLDivElement>(null);
+  const showcaseHexRef = useRef<string | null>(null);
+  const showcaseKeyRef = useRef("");
+  const [showcaseHex, setShowcaseHex] = useState<string | null>(null);
 
   configRef.current = config;
 
@@ -297,6 +205,28 @@ export function CeilingCanvas() {
 
       drawConflictLinks(ctx, plotted, byHex, now);
 
+      // Auto-show ("attract mode"): cheap per-frame selection; only flips React
+      // state when the featured aircraft changes (~every 5–8s).
+      const sc = showcaseRef.current.update(
+        plotted.map((p) => p.track.data.hex),
+        now,
+        cfg.autoShowEnabled,
+      );
+      const scKey = `${sc.visible ? 1 : 0}:${sc.hex ?? ""}`;
+      if (scKey !== showcaseKeyRef.current) {
+        showcaseKeyRef.current = scKey;
+        showcaseHexRef.current = sc.visible ? sc.hex : null;
+        setShowcaseHex(sc.visible ? sc.hex : null);
+      }
+      const selHex = showcaseHexRef.current;
+      if (selHex) {
+        const p = byHex.get(selHex);
+        if (p) {
+          drawShowcaseHighlight(ctx, p.pt, p.size, now);
+          positionShowcase(showcaseAnchorRef.current, p.pt, vp);
+        }
+      }
+
       plottedRef.current = plotted;
       drawHover(ctx, plotted, mouseRef.current, cfg);
 
@@ -311,18 +241,66 @@ export function CeilingCanvas() {
   }, [projection]);
 
   return (
-    <canvas
-      ref={canvasRef}
-      className="ceiling-canvas"
-      onMouseMove={(e) => {
-        const rect = e.currentTarget.getBoundingClientRect();
-        mouseRef.current = { x: e.clientX - rect.left, y: e.clientY - rect.top };
-      }}
-      onMouseLeave={() => {
-        mouseRef.current = null;
-      }}
-    />
+    <>
+      <canvas
+        ref={canvasRef}
+        className="ceiling-canvas"
+        onMouseMove={(e) => {
+          const rect = e.currentTarget.getBoundingClientRect();
+          mouseRef.current = { x: e.clientX - rect.left, y: e.clientY - rect.top };
+        }}
+        onMouseLeave={() => {
+          mouseRef.current = null;
+        }}
+      />
+      {showcaseHex && (
+        <div className="showcase-anchor" ref={showcaseAnchorRef}>
+          <ShowcaseCard hex={showcaseHex} cfg={config} />
+        </div>
+      )}
+    </>
   );
+}
+
+// Distinct (cyan) pulsing ring marking the aircraft featured by the auto-show,
+// so viewers can spot which dot the card refers to.
+function drawShowcaseHighlight(
+  ctx: CanvasRenderingContext2D,
+  pt: ScreenPoint,
+  size: number,
+  now: number,
+): void {
+  const pulse = (now % 1500) / 1500;
+  const r = size * 0.6 + pulse * size * 0.9;
+  ctx.strokeStyle = `rgba(120, 220, 255, ${0.85 * (1 - pulse)})`;
+  ctx.lineWidth = 2.5;
+  ctx.beginPath();
+  ctx.arc(pt.x, pt.y, r, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.strokeStyle = "rgba(150, 230, 255, 0.9)";
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.arc(pt.x, pt.y, size * 0.6, 0, Math.PI * 2);
+  ctx.stroke();
+}
+
+// Position the (DOM) showcase card beside the featured aircraft each frame,
+// clamped to the viewport. Done directly on the element to avoid React churn.
+function positionShowcase(
+  el: HTMLDivElement | null,
+  pt: ScreenPoint,
+  vp: Viewport,
+): void {
+  if (!el) return;
+  const m = 16;
+  const w = el.offsetWidth || 260;
+  const h = el.offsetHeight || 160;
+  let x = pt.x + 44;
+  if (x + w > vp.width - m) x = pt.x - 44 - w; // flip to the left if no room
+  x = Math.max(m, Math.min(x, vp.width - w - m));
+  let y = pt.y - h / 2;
+  y = Math.max(m, Math.min(y, vp.height - h - m));
+  el.style.transform = `translate(${Math.round(x)}px, ${Math.round(y)}px)`;
 }
 
 // Trail fade is approximated with a few contiguous alpha bands instead of one
@@ -589,7 +567,7 @@ function drawHover(
   const lines = [
     a.callsign || a.hex.toUpperCase(),
     operatorLine,
-    resolveRoute(track, cfg),
+    resolveRouteLine(a, cfg),
     `Intent: ${intent}${vrTxt}`,
     a.typeCode ? `Type ${a.typeCode}` : "Type ?",
     a.onGround ? "On ground" : `${Math.round(track.render.altFt).toLocaleString()} ft`,

@@ -235,6 +235,30 @@ separate again. Thresholds are configurable.
   interpolated and legal close spacing (in-trail / parallel approaches near a
   hub) will legitimately trigger it.
 
+### Auto-show / projection flight cards ("attract mode") — **implemented (v0.5)**
+
+A hands-free showcase for ceiling/wall projection: a large, minimal flight card
+cycles through the aircraft currently on screen. The card shows only **airline
+logo, airline name, flight number, and origin → destination** in oversized type,
+and the featured aircraft gets a distinct cyan pulsing ring so viewers can find
+it. Toggle: `autoShowEnabled` (default on).
+
+- **Sequencing** (`showcase/ShowcaseController.ts`, pure timing/selection):
+  pick a random on-screen aircraft → show **5 s** → hide → **3 s** gap → repeat.
+- **New-aircraft priority:** when a small batch of newly-discovered aircraft
+  appears (**1–4** at once), each is queued and shown next; a large influx
+  (≥ 5, e.g. initial load) is ignored to avoid a spam burst.
+- **Card** (`components/ShowcaseCard.tsx`): an HTML overlay (crisp SVG logo + big
+  text, unlike the canvas hover popup). Reads the live aircraft from the store by
+  hex so the route upgrades as lookups resolve; reuses the shared
+  `identity/routeResolve.ts` (adsbdb → OpenSky → trajectory) used by the hover
+  popup.
+- **No mouse needed / no per-frame React churn.** The controller runs in the
+  canvas rAF loop but only flips React state when the featured aircraft changes
+  (~every 5–8 s). The card is positioned beside the aircraft by writing a
+  `transform` directly to the DOM node each frame (clamped to the viewport), and
+  the cyan ring is drawn on the canvas — so the 60 fps render path stays cheap.
+
 ### Phase 6 — Mobile apps (Android + iOS)
 
 > Status: **design only** (this section). No code yet. Goal: ship native

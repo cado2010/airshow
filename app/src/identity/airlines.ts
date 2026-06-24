@@ -65,3 +65,10 @@ export function getLogo(operator?: string): HTMLImageElement | null {
 export function logoReady(img: HTMLImageElement | null): img is HTMLImageElement {
   return !!img && img.complete && img.naturalWidth > 0;
 }
+
+/** URL of an operator's logo file for use in <img src>, or null if none. */
+export function logoSrc(operator?: string): string | null {
+  if (!operator) return null;
+  const ext = manifest[operator];
+  return ext ? `/logos/${operator}.${ext}` : null;
+}

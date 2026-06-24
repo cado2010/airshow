@@ -47,4 +47,6 @@ export interface AirShowConfig {
   conflictNearHorizNm: number;
   /** Terminal-airspace vertical threshold, feet. */
   conflictNearVertFt: number;
+  /** Auto-show mode: cycle a large flight card through aircraft (for projection). */
+  autoShowEnabled: boolean;
 }

@@ -377,3 +377,93 @@ button {
   padding: 6px 12px;
   cursor: pointer;
 }
+
+/* Auto-show projection card: positioned beside the featured aircraft via a
+   transform set each frame; oversized type so it reads on a ceiling/wall. */
+.showcase-anchor {
+  position: absolute;
+  top: 0;
+  left: 0;
+  pointer-events: none;
+  z-index: 30;
+  will-change: transform;
+  animation: showcase-in 260ms ease-out;
+}
+
+@keyframes showcase-in {
+  from {
+    opacity: 0;
+    filter: blur(2px);
+  }
+  to {
+    opacity: 1;
+    filter: none;
+  }
+}
+
+.showcase-card {
+  min-width: 134px;
+  max-width: 258px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 12px 17px;
+  text-align: center;
+  background: rgba(8, 14, 18, 0.86);
+  border: 1px solid rgba(120, 220, 255, 0.45);
+  border-radius: 9px;
+  box-shadow: 0 0 22px rgba(60, 160, 220, 0.35);
+  backdrop-filter: blur(8px);
+  color: #eef6f4;
+}
+
+.showcase-logo {
+  height: 50px;
+  max-width: 180px;
+  object-fit: contain;
+}
+
+.showcase-logo-text {
+  font-size: 17px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: #cfe9ff;
+}
+
+.showcase-airline {
+  font-size: 17px;
+  font-weight: 700;
+  line-height: 1.1;
+}
+
+.showcase-flight {
+  font-size: 14px;
+  font-weight: 600;
+  color: #bfe6ff;
+  letter-spacing: 0.06em;
+}
+
+.showcase-route {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 15px;
+  font-weight: 800;
+  margin-top: 2px;
+}
+
+.showcase-intent {
+  font-size: 13px;
+  font-weight: 600;
+  color: #9fdcb6;
+  letter-spacing: 0.04em;
+}
+
+.showcase-arrow {
+  color: #7fd0ff;
+}
+
+.showcase-ep {
+  white-space: nowrap;
+}

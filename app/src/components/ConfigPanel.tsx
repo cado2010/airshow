@@ -290,6 +290,15 @@ export function ConfigPanel() {
       <label className="config-check">
         <input
           type="checkbox"
+          checked={config.autoShowEnabled}
+          onChange={(e) => update({ autoShowEnabled: e.target.checked })}
+        />
+        Auto-show flight cards (projection)
+      </label>
+
+      <label className="config-check">
+        <input
+          type="checkbox"
           checked={config.conflictEnabled}
           onChange={(e) => update({ conflictEnabled: e.target.checked })}
         />
