@@ -293,7 +293,7 @@ export function ConfigPanel() {
           checked={config.autoShowEnabled}
           onChange={(e) => update({ autoShowEnabled: e.target.checked })}
         />
-        Auto-show flight cards (projection)
+        Auto random flight popup
       </label>
 
       <label className="config-check">

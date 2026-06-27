@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useStore } from "../state/store";
-import { PlanarProjection, type Viewport, type ScreenPoint } from "../geo/projection";
+import type { Viewport, ScreenPoint } from "../geo/projection";
 import { milesToMeters } from "../geo/geo";
 import { TrackManager, type Track } from "../motion/track";
 import { classifyType, colorFor, CLASS_META, type AircraftClass } from "../identity/types";
@@ -22,6 +22,12 @@ import type { AirShowConfig } from "../types";
 const OVERLAY = "rgba(120, 200, 160, 0.16)";
 const OVERLAY_TEXT = "rgba(150, 220, 180, 0.55)";
 const M_PER_DEG_LAT = 111_132;
+// Fraction of the half-viewport the outermost radar ring fills (matches the
+// PlanarProjection default so committed zoom levels look identical pre/post).
+const PADDING_FACTOR = 0.92;
+// Radar radius bounds (miles) for zoom; mirrors the config slider range.
+const RADIUS_MIN = 2;
+const RADIUS_MAX = 150;
 
 interface Plotted {
   track: Track;
@@ -64,6 +70,7 @@ function alphaForAlt(alt: number): number {
 export function CeilingCanvas() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const config = useStore((s) => s.config);
+  const setConfig = useStore((s) => s.setConfig);
 
   const aircraft = useStore((s) => s.aircraft);
   const configRef = useRef<AirShowConfig>(config);
@@ -71,6 +78,17 @@ export function CeilingCanvas() {
   const plottedRef = useRef<Plotted[]>([]);
   const mouseRef = useRef<{ x: number; y: number } | null>(null);
   const lastConflictRef = useRef(0);
+  // Live gesture-preview of the map view. While a zoom/pan gesture is in
+  // progress, `active` is true and the render loop reads radius/center from here
+  // (smooth, no re-fetch). On gesture end we commit these into config (which
+  // re-centers the radar + re-fetches), and a layout effect clears `active` so
+  // the committed values take over with no visual jump.
+  const viewRef = useRef({
+    active: false,
+    radiusMiles: config.radiusMiles,
+    centerLat: config.centerLat,
+    centerLon: config.centerLon,
+  });
   const showcaseRef = useRef<ShowcaseController>(new ShowcaseController());
   const showcaseAnchorRef = useRef<HTMLDivElement>(null);
   const showcaseHexRef = useRef<string | null>(null);
@@ -79,10 +97,12 @@ export function CeilingCanvas() {
 
   configRef.current = config;
 
-  const projection = useMemo(
-    () => new PlanarProjection(milesToMeters(config.radiusMiles)),
-    [config.radiusMiles],
-  );
+  // Whenever the committed view (center/radius) changes from any source —
+  // gesture commit, preset pick, search, slider — drop the live preview so the
+  // config values are what we render. Runs before paint to avoid a flicker.
+  useLayoutEffect(() => {
+    viewRef.current.active = false;
+  }, [config.radiusMiles, config.centerLat, config.centerLon]);
 
   useEffect(() => {
     void loadLogoManifest();
@@ -92,6 +112,188 @@ export function CeilingCanvas() {
   useEffect(() => {
     tmRef.current.ingest(aircraft, Date.now());
   }, [aircraft]);
+
+  // Zoom + pan interactions. Zoom changes the radar RADIUS (zoom in = smaller
+  // radius); pan recenters the map (lat/lon). Desktop: wheel = zoom (about the
+  // center), click-drag = pan. Touch: one finger = pan, pinch = zoom. During a
+  // gesture we mutate the live-preview viewRef for smooth feedback, then commit
+  // to config on gesture end (which re-fetches for the new area). Native
+  // listeners (not React props) so we can preventDefault on wheel/touch and keep
+  // dragging outside the canvas.
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const clamp = (v: number, lo: number, hi: number) =>
+      Math.max(lo, Math.min(hi, v));
+
+    // Seed the live preview from the current committed config when a gesture
+    // starts, so we mutate from the right baseline.
+    const begin = () => {
+      const v = viewRef.current;
+      if (!v.active) {
+        const c = configRef.current;
+        v.radiusMiles = c.radiusMiles;
+        v.centerLat = c.centerLat;
+        v.centerLon = c.centerLon;
+        v.active = true;
+      }
+    };
+
+    // Pixels per meter at the current live radius for the given canvas rect.
+    const ppm = (rect: DOMRect) =>
+      ((Math.min(rect.width, rect.height) / 2) * PADDING_FACTOR) /
+      milesToMeters(viewRef.current.radiusMiles);
+
+    // factor < 1 shrinks the radius (zoom in), > 1 grows it (zoom out).
+    const zoomBy = (factor: number) => {
+      begin();
+      const v = viewRef.current;
+      v.radiusMiles = clamp(v.radiusMiles * factor, RADIUS_MIN, RADIUS_MAX);
+    };
+
+    // Drag delta in CSS pixels -> shift of the geographic center.
+    const panBy = (dx: number, dy: number) => {
+      begin();
+      const v = viewRef.current;
+      const s = ppm(canvas.getBoundingClientRect());
+      const mPerDegLon =
+        M_PER_DEG_LAT * Math.cos((v.centerLat * Math.PI) / 180) || 1;
+      v.centerLon -= dx / (mPerDegLon * s);
+      v.centerLat += dy / (M_PER_DEG_LAT * s);
+    };
+
+    // Push the live preview into config; the layout effect clears `active`.
+    const commit = () => {
+      const v = viewRef.current;
+      if (!v.active) return;
+      setConfig({
+        radiusMiles: Number(v.radiusMiles.toFixed(1)),
+        centerLat: Number(v.centerLat.toFixed(4)),
+        centerLon: Number(v.centerLon.toFixed(4)),
+        locationLabel: "Custom",
+      });
+    };
+
+    let wheelTimer = 0;
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      // Scroll up (deltaY < 0) -> factor < 1 -> smaller radius -> zoom in.
+      zoomBy(Math.exp(e.deltaY * 0.0015));
+      window.clearTimeout(wheelTimer);
+      wheelTimer = window.setTimeout(commit, 350);
+    };
+
+    let dragging = false;
+    let moved = false;
+    let lastX = 0;
+    let lastY = 0;
+    const onDown = (e: MouseEvent) => {
+      if (e.button !== 0) return;
+      dragging = true;
+      moved = false;
+      lastX = e.clientX;
+      lastY = e.clientY;
+      canvas.style.cursor = "grabbing";
+    };
+    const onMove = (e: MouseEvent) => {
+      if (dragging) {
+        moved = true;
+        panBy(e.clientX - lastX, e.clientY - lastY);
+        lastX = e.clientX;
+        lastY = e.clientY;
+        mouseRef.current = null; // suppress hover tooltip while panning
+      } else if (e.target === canvas) {
+        const rect = canvas.getBoundingClientRect();
+        mouseRef.current = { x: e.clientX - rect.left, y: e.clientY - rect.top };
+      } else {
+        mouseRef.current = null;
+      }
+    };
+    const onUp = () => {
+      if (!dragging) return;
+      dragging = false;
+      canvas.style.cursor = "grab";
+      if (moved) commit();
+    };
+    const onLeave = () => {
+      mouseRef.current = null;
+    };
+
+    let touchMode: "none" | "pan" | "pinch" = "none";
+    let tx = 0;
+    let ty = 0;
+    let pinchDist = 0;
+    const tdist = (a: Touch, b: Touch) =>
+      Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
+    const onTouchStart = (e: TouchEvent) => {
+      if (e.touches.length === 1) {
+        touchMode = "pan";
+        tx = e.touches[0].clientX;
+        ty = e.touches[0].clientY;
+        mouseRef.current = null;
+      } else if (e.touches.length >= 2) {
+        touchMode = "pinch";
+        pinchDist = tdist(e.touches[0], e.touches[1]);
+      }
+    };
+    const onTouchMove = (e: TouchEvent) => {
+      e.preventDefault();
+      if (touchMode === "pan" && e.touches.length === 1) {
+        const t = e.touches[0];
+        panBy(t.clientX - tx, t.clientY - ty);
+        tx = t.clientX;
+        ty = t.clientY;
+      } else if (touchMode === "pinch" && e.touches.length >= 2) {
+        const nd = tdist(e.touches[0], e.touches[1]);
+        // Expand (nd > pinchDist) -> ratio < 1 -> smaller radius -> zoom in.
+        if (pinchDist > 0 && nd > 0) zoomBy(pinchDist / nd);
+        pinchDist = nd;
+      }
+    };
+    const onTouchEnd = (e: TouchEvent) => {
+      if (e.touches.length === 0) {
+        touchMode = "none";
+        commit();
+      } else if (e.touches.length === 1) {
+        touchMode = "pan";
+        tx = e.touches[0].clientX;
+        ty = e.touches[0].clientY;
+      }
+    };
+
+    // iOS Safari fires non-standard gesture* events for pinch and will page-zoom
+    // even with touch-action:none unless we cancel them. Our touch handlers do
+    // the actual zooming, so here we just block the browser's default.
+    const onGesture = (e: Event) => e.preventDefault();
+
+    canvas.style.cursor = "grab";
+    canvas.addEventListener("wheel", onWheel, { passive: false });
+    canvas.addEventListener("mousedown", onDown);
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+    canvas.addEventListener("mouseleave", onLeave);
+    canvas.addEventListener("touchstart", onTouchStart, { passive: false });
+    canvas.addEventListener("touchmove", onTouchMove, { passive: false });
+    canvas.addEventListener("touchend", onTouchEnd);
+    canvas.addEventListener("gesturestart", onGesture as EventListener);
+    canvas.addEventListener("gesturechange", onGesture as EventListener);
+    canvas.addEventListener("gestureend", onGesture as EventListener);
+
+    return () => {
+      window.clearTimeout(wheelTimer);
+      canvas.removeEventListener("wheel", onWheel);
+      canvas.removeEventListener("mousedown", onDown);
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+      canvas.removeEventListener("mouseleave", onLeave);
+      canvas.removeEventListener("touchstart", onTouchStart);
+      canvas.removeEventListener("touchmove", onTouchMove);
+      canvas.removeEventListener("touchend", onTouchEnd);
+      canvas.removeEventListener("gesturestart", onGesture as EventListener);
+      canvas.removeEventListener("gesturechange", onGesture as EventListener);
+      canvas.removeEventListener("gestureend", onGesture as EventListener);
+    };
+  }, [setConfig]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -123,19 +325,27 @@ export function CeilingCanvas() {
       ctx.fillStyle = "#000";
       ctx.fillRect(0, 0, vp.width, vp.height);
 
-      drawRadarOverlay(ctx, projection, vp, configRef.current);
-
       const cfg = configRef.current;
-      // Precompute the (planar/equirectangular) projection once per frame so the
-      // per-point hot path is pure arithmetic with no allocations or trig.
-      const s = projection.metersToPixels(1, vp);
+      // During a zoom/pan gesture the live preview drives radius+center (smooth,
+      // no re-fetch); otherwise we use the committed config. The radar is always
+      // centered on the screen — pan is baked into centerLat/centerLon.
+      const view = viewRef.current;
+      const radiusMiles = view.active ? view.radiusMiles : cfg.radiusMiles;
+      const centerLat = view.active ? view.centerLat : cfg.centerLat;
+      const centerLon = view.active ? view.centerLon : cfg.centerLon;
+      const s =
+        ((Math.min(vp.width, vp.height) / 2) * PADDING_FACTOR) /
+        milesToMeters(radiusMiles);
       const cx = vp.width / 2;
       const cy = vp.height / 2;
-      const mPerDegLon = M_PER_DEG_LAT * Math.cos((cfg.centerLat * Math.PI) / 180);
+
+      drawRadarOverlay(ctx, vp, radiusMiles, cx, cy, s);
+
+      const mPerDegLon = M_PER_DEG_LAT * Math.cos((centerLat * Math.PI) / 180);
       const px = (_lat: number, lon: number): number =>
-        cx + (lon - cfg.centerLon) * mPerDegLon * s;
+        cx + (lon - centerLon) * mPerDegLon * s;
       const py = (lat: number, _lon: number): number =>
-        cy - (lat - cfg.centerLat) * M_PER_DEG_LAT * s;
+        cy - (lat - centerLat) * M_PER_DEG_LAT * s;
       const project = (lat: number, lon: number): ScreenPoint => ({
         x: px(lat, lon),
         y: py(lat, lon),
@@ -238,21 +448,11 @@ export function CeilingCanvas() {
       cancelAnimationFrame(raf);
       ro.disconnect();
     };
-  }, [projection]);
+  }, []);
 
   return (
     <>
-      <canvas
-        ref={canvasRef}
-        className="ceiling-canvas"
-        onMouseMove={(e) => {
-          const rect = e.currentTarget.getBoundingClientRect();
-          mouseRef.current = { x: e.clientX - rect.left, y: e.clientY - rect.top };
-        }}
-        onMouseLeave={() => {
-          mouseRef.current = null;
-        }}
-      />
+      <canvas ref={canvasRef} className="ceiling-canvas" />
       {showcaseHex && (
         <div className="showcase-anchor" ref={showcaseAnchorRef}>
           <ShowcaseCard hex={showcaseHex} cfg={config} />
@@ -447,12 +647,12 @@ function drawConflictLinks(
 
 function drawRadarOverlay(
   ctx: CanvasRenderingContext2D,
-  projection: PlanarProjection,
   vp: Viewport,
-  config: AirShowConfig,
+  radiusMiles: number,
+  cx: number,
+  cy: number,
+  ppm: number, // pixels per meter (includes zoom)
 ): void {
-  const cx = vp.width / 2;
-  const cy = vp.height / 2;
   const rings = 4;
   ctx.lineWidth = 1;
   ctx.strokeStyle = OVERLAY;
@@ -462,8 +662,8 @@ function drawRadarOverlay(
   ctx.textBaseline = "middle";
 
   for (let i = 1; i <= rings; i++) {
-    const miles = (config.radiusMiles / rings) * i;
-    const r = projection.metersToPixels(milesToMeters(miles), vp);
+    const miles = (radiusMiles / rings) * i;
+    const r = milesToMeters(miles) * ppm;
     ctx.beginPath();
     ctx.arc(cx, cy, r, 0, Math.PI * 2);
     ctx.stroke();
@@ -477,7 +677,7 @@ function drawRadarOverlay(
   ctx.lineTo(vp.width, cy);
   ctx.stroke();
 
-  const outer = projection.metersToPixels(milesToMeters(config.radiusMiles), vp);
+  const outer = milesToMeters(radiusMiles) * ppm;
   const angle = (Date.now() / 4000) % (Math.PI * 2);
 
   // Trailing afterglow wedge behind the leading edge (conic gradient is bright

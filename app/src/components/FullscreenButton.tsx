@@ -1,23 +1,69 @@
 import { useEffect, useState } from "react";
 
-/** Toggles real full screen (like the browser's F11) via the Fullscreen API.
- *  Works the same in a normal browser tab and inside the Electron shell. */
-export function FullscreenButton() {
-  const [isFull, setIsFull] = useState(false);
+// Cross-browser fullscreen, including older WebKit (Safari) prefixes.
+type FsDoc = Document & {
+  webkitFullscreenElement?: Element | null;
+  webkitExitFullscreen?: () => void;
+};
+type FsEl = HTMLElement & { webkitRequestFullscreen?: () => void };
 
-  const toggle = () => {
-    if (document.fullscreenElement) {
-      void document.exitFullscreen().catch(() => {});
+const docEl = document.documentElement as FsEl;
+const fsSupported =
+  typeof docEl.requestFullscreen === "function" ||
+  typeof docEl.webkitRequestFullscreen === "function";
+
+function fsActive(): boolean {
+  const d = document as FsDoc;
+  return Boolean(d.fullscreenElement || d.webkitFullscreenElement);
+}
+
+// Running as an installed app (Android PWA / iOS "Add to Home Screen") — there's
+// no browser chrome to toggle, so the button is unnecessary.
+function isStandalone(): boolean {
+  const mm = window.matchMedia;
+  return (
+    (mm && (mm("(display-mode: standalone)").matches || mm("(display-mode: fullscreen)").matches)) ||
+    (navigator as unknown as { standalone?: boolean }).standalone === true
+  );
+}
+
+/**
+ * Toggles full screen. Uses the Fullscreen API (with WebKit fallback) where
+ * available — desktop browsers, the Electron shell, and Android Chrome. On iOS
+ * Safari (no Fullscreen API for non-video) it falls back to an "immersive" mode
+ * that hides the on-screen chrome to maximize the radar; true fullscreen there
+ * comes from installing via Add to Home Screen (see PWA manifest).
+ */
+export function FullscreenButton() {
+  const [active, setActive] = useState(false);
+
+  if (isStandalone()) return null;
+
+  const enter = () => {
+    if (fsSupported) {
+      (docEl.requestFullscreen ?? docEl.webkitRequestFullscreen)?.call(docEl);
     } else {
-      void document.documentElement.requestFullscreen().catch(() => {});
+      document.documentElement.classList.add("immersive");
+      setActive(true);
     }
   };
+  const exit = () => {
+    if (fsSupported) {
+      const d = document as FsDoc;
+      (d.exitFullscreen ?? d.webkitExitFullscreen)?.call(d);
+    } else {
+      document.documentElement.classList.remove("immersive");
+      setActive(false);
+    }
+  };
+  const toggle = () => (active ? exit() : enter());
 
   useEffect(() => {
-    const onChange = () => setIsFull(Boolean(document.fullscreenElement));
+    const onChange = () => {
+      if (fsSupported) setActive(fsActive());
+    };
     document.addEventListener("fullscreenchange", onChange);
-
-    // Let F11 drive the same Fullscreen API path everywhere.
+    document.addEventListener("webkitfullscreenchange", onChange);
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "F11") {
         e.preventDefault();
@@ -25,12 +71,13 @@ export function FullscreenButton() {
       }
     };
     window.addEventListener("keydown", onKey);
-
     return () => {
       document.removeEventListener("fullscreenchange", onChange);
+      document.removeEventListener("webkitfullscreenchange", onChange);
       window.removeEventListener("keydown", onKey);
     };
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [active]);
 
   return (
     <button
@@ -38,7 +85,7 @@ export function FullscreenButton() {
       onClick={toggle}
       title="Toggle full screen (F11)"
     >
-      {isFull ? "🡼 Exit full screen" : "⛶ Full screen"}
+      {active ? "\u{1F87C} Exit full screen" : "\u26F6 Full screen"}
     </button>
   );
 }

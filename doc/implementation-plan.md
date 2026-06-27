@@ -259,6 +259,33 @@ it. Toggle: `autoShowEnabled` (default on).
   `transform` directly to the DOM node each frame (clamped to the viewport), and
   the cyan ring is drawn on the canvas — so the 60 fps render path stays cheap.
 
+### Zoom & pan + mobile layout — **implemented**
+
+- **Semantics:** zoom changes the **radar radius** (zoom in ⇒ smaller radius)
+  and pan **recenters** the map (new lat/lon) — both are committed to config when
+  the gesture ends, so the data query re-fetches for the new area (not a purely
+  visual magnification). **Desktop:** mouse wheel zooms about the center,
+  left-click-drag pans. **Touch:** one-finger drag pans, two-finger pinch zooms
+  (expand = in, pinch = out).
+- **Implementation:** a live-preview `viewRef`
+  (`{ active, radiusMiles, centerLat, centerLon }`) is seeded from config on
+  gesture start and mutated by native listeners (wheel/touch use `passive:false`
+  + `touch-action: none`) for smooth 60 fps feedback with no re-fetch mid-gesture.
+  The render loop reads radius/center from the preview while `active`, otherwise
+  from config. On gesture end (mouse-up, pinch/drag-up, or ~350 ms after the last
+  wheel tick) the preview is written to config via `setConfig`; a
+  `useLayoutEffect` keyed on `radiusMiles/centerLat/centerLon` then clears
+  `active` before paint, so the committed values take over with no flicker, the
+  SSE stream reconnects for the new region, and range rings/labels stay correct.
+- **Mobile layout:** config panel becomes a bottom sheet with large touch
+  targets (16px inputs to stop iOS zoom-on-focus, big range thumbs, sticky
+  header); `100dvh` to avoid toolbar jumps; safe-area insets. Fullscreen uses the
+  Fullscreen API (WebKit fallback) with an immersive UI-hide fallback on iOS
+  Safari, plus a PWA manifest + Apple meta so "Add to Home Screen" runs
+  standalone (button auto-hides when already standalone).
+- **Auto-show toggle:** `autoShowEnabled` (default on) — "Auto random flight
+  popup" checkbox enables/disables the random flight-card showcase.
+
 ### Phase 6 — Mobile apps (Android + iOS)
 
 > Status: **design only** (this section). No code yet. Goal: ship native
