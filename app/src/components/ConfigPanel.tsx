@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useStore } from "../state/store";
 import type { AirShowConfig } from "../types";
 import { AboutDialog } from "./AboutDialog";
+import { apiFetch } from "../auth/auth";
 import {
   loadAirports,
   searchAirports,
@@ -78,7 +79,7 @@ export function ConfigPanel() {
   // location service is unavailable.
   const geolocateByIp = async () => {
     try {
-      const res = await fetch("/api/geolocate");
+      const res = await apiFetch("/api/geolocate");
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const d = (await res.json()) as { lat: number; lon: number; label: string };
       update({

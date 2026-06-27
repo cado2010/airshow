@@ -24,4 +24,8 @@ const tls =
     ? { key: readFileSync(keyPath, "utf8"), cert: readFileSync(certPath, "utf8") }
     : undefined;
 
-void startServer({ staticDir, tls });
+// Auth is on by default for the exposed standalone host; set AIRSHOW_AUTH=0 to
+// disable (e.g. a throwaway local dev session).
+const auth = process.env.AIRSHOW_AUTH !== "0";
+
+void startServer({ staticDir, tls, auth });

@@ -4,8 +4,10 @@ import { CeilingCanvas } from "./render/CeilingCanvas";
 import { ConfigPanel } from "./components/ConfigPanel";
 import { StatusBar } from "./components/StatusBar";
 import { FullscreenButton } from "./components/FullscreenButton";
+import { LoginScreen } from "./components/LoginScreen";
+import { isAuthed, subscribeAuth } from "./auth/auth";
 
-export default function App() {
+function MainApp() {
   useStream();
   const [version, setVersion] = useState("");
 
@@ -30,4 +32,13 @@ export default function App() {
       <ConfigPanel />
     </div>
   );
+}
+
+export default function App() {
+  // Token lives in memory only, so every fresh load starts at the login screen.
+  const [authed, setAuthed] = useState(isAuthed());
+  useEffect(() => subscribeAuth(() => setAuthed(isAuthed())), []);
+
+  if (!authed) return <LoginScreen />;
+  return <MainApp />;
 }

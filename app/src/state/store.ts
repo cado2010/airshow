@@ -25,7 +25,7 @@ const DEFAULT_CONFIG: AirShowConfig = {
   conflictTighterNearAirport: true,
   conflictNearHorizNm: 0.5,
   conflictNearVertFt: 400,
-  autoShowEnabled: true,
+  autoShowEnabled: false,
 };
 
 function loadConfig(): AirShowConfig {

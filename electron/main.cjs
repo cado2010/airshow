@@ -36,7 +36,8 @@ async function boot() {
     }
     // Serve the built frontend that sits alongside this file.
     const staticDir = path.join(__dirname, "..", "app", "dist");
-    running = await startServer({ port: 0, staticDir });
+    // Require login in the desktop shell too (single user, but per request).
+    running = await startServer({ port: 0, staticDir, auth: true });
     url = `http://localhost:${running.port}`;
   }
 

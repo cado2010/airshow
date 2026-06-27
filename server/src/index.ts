@@ -8,6 +8,7 @@ import { StreamHub } from "./stream.js";
 import { outboundDispatcher } from "./providers.js";
 import { lookupRoute } from "./routes.js";
 import { lookupOpenSky, openSkyEnabled } from "./opensky.js";
+import { loginHandler, meHandler, requireAuth } from "./auth.js";
 import type { AircraftResponse } from "./types.js";
 
 const MAX_DIST_NM = 250;
@@ -19,6 +20,8 @@ export interface ServerOptions {
   staticDir?: string;
   /** PEM key+cert to terminate TLS. When set the server listens over HTTPS. */
   tls?: { key: string; cert: string };
+  /** Require a JWT (from /api/login) on every /api route except login/health. */
+  auth?: boolean;
 }
 
 export interface RunningServer {
@@ -46,6 +49,23 @@ export function createApp(opts: ServerOptions = {}): express.Express {
 
   const app = express();
   app.use(cors());
+  app.use(express.json({ limit: "1mb" }));
+
+  // Auth gate: /api/login issues a JWT; everything else under /api requires it.
+  // Public exceptions: /login, /health, /me (which checks the token itself).
+  // The static frontend stays public so the SPA + login screen can load. The
+  // SSE client passes the token via ?token= since EventSource can't set headers.
+  if (opts.auth) {
+    app.post("/api/login", loginHandler);
+    app.get("/api/me", requireAuth, meHandler);
+    app.use("/api", (req, res, next) => {
+      if (req.path === "/login" || req.path === "/health" || req.path === "/me") {
+        next();
+        return;
+      }
+      requireAuth(req, res, next);
+    });
+  }
 
   app.get("/api/health", (_req, res) => {
     res.json({ ok: true, replay: replay.span });

@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import { useStore } from "../state/store";
 import { milesToNm } from "../geo/geo";
+import { withToken, apiFetch } from "../auth/auth";
 
 interface SnapshotMsg {
   type: "snapshot";
@@ -38,7 +39,11 @@ export function useStream(): void {
     const env = import.meta.env as Record<string, string | undefined>;
     const sseBase =
       env.VITE_SSE_BASE ?? (import.meta.env.DEV ? "http://localhost:8787" : "");
-    const url = `${sseBase}/api/stream?lat=${config.centerLat}&lon=${config.centerLon}&dist=${distNm}`;
+    // EventSource can't set an Authorization header, so the JWT rides as a query
+    // param (the server accepts ?token= for the stream route).
+    const url = withToken(
+      `${sseBase}/api/stream?lat=${config.centerLat}&lon=${config.centerLon}&dist=${distNm}`,
+    );
 
     // Watchdog: EventSource's built-in retry can wedge (e.g. the dev server
     // restarts, or a proxy half-opens the connection) leaving us "connected"
@@ -47,6 +52,7 @@ export function useStream(): void {
     const STALE_MS = 10_000;
     let es: EventSource | null = null;
     let lastMessageAt = Date.now();
+    let lastAuthCheck = 0;
     let closed = false;
 
     const connect = () => {
@@ -72,6 +78,14 @@ export function useStream(): void {
 
       es.onerror = () => {
         setStatus("error", "stream disconnected — reconnecting…");
+        // EventSource hides the HTTP status, so a rejected (401) token looks like
+        // a generic error. Probe /api/me: apiFetch logs out on 401, which flips
+        // the app back to the login screen instead of reconnecting forever.
+        const now = Date.now();
+        if (now - lastAuthCheck > 5000) {
+          lastAuthCheck = now;
+          void apiFetch("/api/me").catch(() => {});
+        }
       };
     };
 

@@ -1,3 +1,5 @@
+import { apiFetch } from "../auth/auth";
+
 export interface RouteAirport {
   iata?: string;
   icao?: string;
@@ -36,7 +38,7 @@ export function getRoute(callsign?: string): CacheValue | undefined {
 
 async function fetchRoute(callsign: string): Promise<void> {
   try {
-    const res = await fetch(`/api/route?callsign=${encodeURIComponent(callsign)}`);
+    const res = await apiFetch(`/api/route?callsign=${encodeURIComponent(callsign)}`);
     if (res.status === 204) {
       cache.set(callsign, null);
       return;

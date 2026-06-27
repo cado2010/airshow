@@ -1,3 +1,5 @@
+import { apiFetch } from "../auth/auth";
+
 // Non-blocking client cache for OpenSky track-derived routes (by icao24/hex).
 // Mirrors identity/routes.ts: the render loop calls getOpenSky() synchronously
 // every frame — it returns the cached value (or undefined while loading) and
@@ -34,7 +36,7 @@ export function getOpenSky(hex?: string): CacheValue | undefined {
 
 async function fetchOpenSky(hex: string): Promise<void> {
   try {
-    const res = await fetch(`/api/opensky?icao24=${encodeURIComponent(hex)}`);
+    const res = await apiFetch(`/api/opensky?icao24=${encodeURIComponent(hex)}`);
     if (res.status === 204 || !res.ok) {
       cache.set(hex, null);
       return;
