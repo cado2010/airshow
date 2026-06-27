@@ -286,6 +286,118 @@ it. Toggle: `autoShowEnabled` (default on).
 - **Auto-show toggle:** `autoShowEnabled` (default on) — "Auto random flight
   popup" checkbox enables/disables the random flight-card showcase.
 
+### Self-hosted exposure: HTTPS + login — **design only**
+
+> Status: **design only** (no code yet). Goal: safely expose the standalone HTTP
+> host (the `server/dev.ts` + `STATIC_DIR` host currently on port 9443) to the
+> network/internet with **TLS** and a **password gate**, without building a user-
+> management UI. Self-signed cert now; real cert + domain later (drop-in swap).
+
+**Where this applies (and where it doesn't).** The server has three run modes:
+1. **Electron desktop** — embedded server on `localhost` (loopback, port 0). No
+   TLS, no login (it's a single-user local app). Auth stays **off** here.
+2. **Standalone host** (`server/dev.ts` + `STATIC_DIR`, e.g. port 9443) — the one
+   reachable from other devices/the internet. TLS + login apply **here**.
+3. **Vite dev** — unchanged; talks to the plain-HTTP API on 8787.
+
+   So both new features are **opt-in flags** threaded through `createApp()` /
+   `startServer()`; Electron passes them off.
+
+#### 1) HTTPS with a self-signed cert (real cert later)
+
+- **Termination in Node** (no nginx/Caddy): `startServer()` gains an optional
+  `tls?: { key: string; cert: string }`. When present it uses
+  `https.createServer({ key, cert }, app)`; otherwise it stays on `http` exactly
+  as today. This keeps Electron/dev on HTTP and only the exposed host on HTTPS.
+- **Cert location:** `server/creds/tls/key.pem` + `server/creds/tls/cert.pem`
+  (the `server/creds/` folder is already git-ignored and already bundled by
+  electron-builder's `files`). Resolution mirrors the existing OpenSky pattern
+  (env override `TLS_KEY_PATH`/`TLS_CERT_PATH`, else the creds folder).
+- **Generating the self-signed pair (Windows-friendly):** a one-time
+  `scripts/gen-cert.mjs` using the `selfsigned` npm package (no OpenSSL needed),
+  emitting a cert with SANs `localhost`, `127.0.0.1`, the LAN IP, and (later) the
+  domain. Re-runnable; the real cert later just overwrites these two PEM files.
+- **HTTP→HTTPS redirect (optional):** a tiny second listener (port 80/8080) that
+  301-redirects to the HTTPS origin. Off by default; enabled by env when wanted.
+- **Going to a real cert later:** drop the provider/Let's-Encrypt
+  `privkey.pem`/`fullchain.pem` into `server/creds/tls/` (same filenames or via
+  the env paths) and restart — **no code change**. Point the domain's DNS A/AAAA
+  record (or the provider's redirect/proxy) at the host. Only **then** turn on
+  HSTS and set the session-cookie `Domain` — never with the self-signed cert.
+- **Caveats to expect with self-signed:** browsers show a one-time
+  "Not secure / `ERR_CERT_AUTHORITY_INVALID`" interstitial; after "proceed",
+  same-origin requests incl. **SSE/EventSource** work for that session. Service
+  Workers and full **PWA install** require *trusted* TLS, so "Add to Home Screen"
+  as a true standalone app is degraded until the real cert is in place (the app
+  still runs fine in the browser tab). Trusting the cert in the OS/browser store
+  removes the warning if desired.
+
+#### 2) User database + login (no admin portal)
+
+- **Store:** `server/creds/users.json` (git-ignored, server-side only — it is
+  **never** part of the frontend bundle shipped to clients). Shape:
+  `[{ "email": "...", "hash": "scrypt$N$r$p$<saltB64>$<hashB64>", "role": "admin", "createdAt": 169... }]`.
+- **Password hashing — salted scrypt (Node built-in `crypto`, zero new deps).**
+  The request says "simple one-way hash"; we implement it the correct way with a
+  per-user random salt and the slow, memory-hard `scrypt` KDF so a leaked file
+  can't be trivially reversed (a bare SHA-256 would also be one-way but is brute-
+  forceable — scrypt is strictly better for the same effort). Verification uses
+  `crypto.timingSafeEqual` (constant-time). Plaintext passwords are **never**
+  written to disk or logged.
+- **Adding users without a UI** — `scripts/add-user.mjs <email>`: prompts for the
+  password with hidden input, computes the scrypt record, and upserts it into
+  `users.json`. This is the "prompt to you only" flow: you tell me an
+  email+password, I run the script (or write the hashed record), and only the
+  **hash** is stored. No signup, no admin pages, no password reset surface.
+- **Sessions fit SSE.** Because `EventSource` can't send `Authorization` headers
+  but *does* send same-origin cookies, auth is **cookie-session** based:
+  - `POST /api/login` `{ email, password }` → verify → set an **HttpOnly,
+    Secure, SameSite=Lax** cookie holding a signed token
+    (`base64(payload).hmacSHA256`, payload = `{ email, exp }`), signed with a
+    server secret in `server/creds/session_secret` (auto-generated on first run
+    if absent). Stateless — no server-side session table needed.
+  - `POST /api/logout` clears the cookie. `GET /api/me` returns the current user
+    (or 401) so the SPA knows whether to show the login screen.
+  - **Gate:** a `requireAuth` middleware protects the data routes (`/api/stream`,
+    `/api/aircraft`, `/api/route`, `/api/opensky`, `/api/geolocate`). Public:
+    `/api/login`, `/api/me`, `/api/health`, and the **static frontend** (HTML/JS/
+    CSS carry no secrets) — the SPA simply renders a login form until `/api/me`
+    succeeds. Login is **rate-limited** (small in-memory per-IP throttle) to slow
+    brute force.
+  - `Secure` cookies require HTTPS, so this rides on feature (1); on the plain-
+    HTTP dev/Electron paths auth is off so the flag never bites.
+- **Frontend (described, not built):** a `LoginScreen` overlay shown when
+  `/api/me` is 401; on submit it POSTs `/api/login` (cookie set automatically)
+  then re-checks `/api/me` and mounts the app. `useStream` must **not** auto-retry
+  on a 401 from `/api/stream` (it should close the `EventSource` and surface the
+  login screen) to avoid a reconnect storm. A small "Sign out" affordance calls
+  `/api/logout`.
+- **Electron:** auth flag off (loopback, single user); the desktop app keeps
+  working with no login prompt.
+
+#### 3) Initial admin user
+
+- Seed `server/creds/users.json` with **`cado2010@gmail.com`** as `role: admin`,
+  stored only as a salted **scrypt** hash of the provided password (the plaintext
+  is not recorded in the repo, this doc, or any log). Created via the same
+  `add-user.mjs` flow during implementation.
+
+#### New modules / touch-points (when implemented)
+
+- `server/src/tls.ts` — load/resolve key+cert, pick `http` vs `https`.
+- `server/src/auth.ts` — users.json load, scrypt hash/verify, session
+  sign/verify (HMAC), `login`/`logout`/`me` handlers, `requireAuth`, login
+  throttle.
+- `server/src/index.ts` — `createApp({ auth })` mounts auth routes + gate;
+  `startServer({ tls })` chooses the HTTPS listener.
+- `server/src/dev.ts` — read `TLS_*`, `AIRSHOW_AUTH`, `STATIC_DIR`, `PORT`.
+- `scripts/gen-cert.mjs`, `scripts/add-user.mjs` — one-off operator tools.
+- `app/src/components/LoginScreen.tsx` + a `useAuth` check; `useStream` 401
+  handling.
+- Deps: `selfsigned` (cert script only); password/session use built-in `crypto`.
+  Cookie parsing is a few lines off `req.headers.cookie` (or a tiny
+  `cookie-parser`).
+
 ### Phase 6 — Mobile apps (Android + iOS)
 
 > Status: **design only** (this section). No code yet. Goal: ship native

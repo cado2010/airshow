@@ -1,3 +1,5 @@
+import http from "node:http";
+import https from "node:https";
 import express from "express";
 import cors from "cors";
 import { AircraftCache } from "./cache.js";
@@ -15,6 +17,8 @@ export interface ServerOptions {
   port?: number;
   /** Directory of the built frontend to serve (Electron/standalone builds). */
   staticDir?: string;
+  /** PEM key+cert to terminate TLS. When set the server listens over HTTPS. */
+  tls?: { key: string; cert: string };
 }
 
 export interface RunningServer {
@@ -192,12 +196,19 @@ export function startServer(opts: ServerOptions = {}): Promise<RunningServer> {
   const requestedPort =
     opts.port ?? Number(process.env.PORT ?? 8787);
 
+  // HTTPS when a key+cert are supplied (exposed standalone host), plain HTTP
+  // otherwise (Electron loopback, dev). Same Express app either way.
+  const server = opts.tls
+    ? https.createServer({ key: opts.tls.key, cert: opts.tls.cert }, app)
+    : http.createServer(app);
+
   return new Promise((resolve, reject) => {
-    const server = app.listen(requestedPort, () => {
+    server.listen(requestedPort, () => {
       const addr = server.address();
       const port =
         typeof addr === "object" && addr ? addr.port : requestedPort;
-      console.log(`[airshow] proxy listening on http://localhost:${port}`);
+      const proto = opts.tls ? "https" : "http";
+      console.log(`[airshow] proxy listening on ${proto}://localhost:${port}`);
       resolve({
         port,
         close: () =>

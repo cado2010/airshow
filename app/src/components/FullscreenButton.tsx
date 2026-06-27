@@ -19,11 +19,18 @@ function fsActive(): boolean {
 
 // Running as an installed app (Android PWA / iOS "Add to Home Screen") — there's
 // no browser chrome to toggle, so the button is unnecessary.
-function isStandalone(): boolean {
+//
+// NOTE: deliberately does NOT test `display-mode: fullscreen`. That media query
+// also matches while the Fullscreen API is active, so testing it here would make
+// the button try to unmount the instant we enter fullscreen — and because this
+// value gates an early return, that changed the hook count between renders and
+// threw React error #300 ("rendered fewer hooks than expected"), blanking the
+// whole app. Evaluate once at mount and only for genuinely installed PWAs.
+function isInstalled(): boolean {
   const mm = window.matchMedia;
-  return (
-    (mm && (mm("(display-mode: standalone)").matches || mm("(display-mode: fullscreen)").matches)) ||
-    (navigator as unknown as { standalone?: boolean }).standalone === true
+  return Boolean(
+    (mm && mm("(display-mode: standalone)").matches) ||
+      (navigator as unknown as { standalone?: boolean }).standalone === true,
   );
 }
 
@@ -36,8 +43,9 @@ function isStandalone(): boolean {
  */
 export function FullscreenButton() {
   const [active, setActive] = useState(false);
-
-  if (isStandalone()) return null;
+  // Evaluate installed-PWA state once at mount. Doing this as a hook (and never
+  // conditionally) keeps the hook order stable across renders.
+  const [installed] = useState(isInstalled);
 
   const enter = () => {
     if (fsSupported) {
@@ -78,6 +86,10 @@ export function FullscreenButton() {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [active]);
+
+  // Safe early return: it comes AFTER every hook, so the hook count never
+  // changes between renders.
+  if (installed) return null;
 
   return (
     <button

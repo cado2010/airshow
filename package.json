@@ -16,6 +16,8 @@
     "build": "npm -w server run build && npm -w app run build",
     "build:icon": "node scripts/make-icon.mjs",
     "fetch:airports": "node scripts/fetch-airports.mjs",
+    "serve": "powershell -NoProfile -ExecutionPolicy Bypass -File serve.ps1",
+    "serve:https": "powershell -NoProfile -ExecutionPolicy Bypass -File serve-https.ps1",
     "build:electron": "npm -w app run build && node scripts/build-electron.mjs && node scripts/make-icon.mjs",
     "dist": "npm run build:electron && electron-builder --win nsis",
     "dist:dir": "npm run build:electron && electron-builder --win dir",
