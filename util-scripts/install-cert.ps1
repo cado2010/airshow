@@ -7,7 +7,8 @@
 # renewal — or wire it as a certbot deploy hook:
 #   certbot ... --deploy-hook "powershell -ExecutionPolicy Bypass -File C:\dev\airshow\install-cert.ps1"
 $ErrorActionPreference = 'Stop'
-$root = $PSScriptRoot
+# This script lives in util-scripts/, so the repo root is its parent.
+$root = Split-Path -Parent $PSScriptRoot
 $live = Join-Path $root 'server\creds\letsencrypt\config\live\airshow.opbdf.org'
 $dst = Join-Path $root 'server\creds\tls'
 

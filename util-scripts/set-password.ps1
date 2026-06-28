@@ -12,7 +12,8 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$root = $PSScriptRoot
+# This script lives in util-scripts/, so the repo root is its parent.
+$root = Split-Path -Parent $PSScriptRoot
 
 if (-not $Email) {
   $Email = Read-Host 'Email'

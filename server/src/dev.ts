@@ -28,4 +28,12 @@ const tls =
 // disable (e.g. a throwaway local dev session).
 const auth = process.env.AIRSHOW_AUTH !== "0";
 
-void startServer({ staticDir, tls, auth });
+// Access log on by default (project-root logs/access.log). Disable with
+// AIRSHOW_ACCESS_LOG=off (or 0); override the path with AIRSHOW_ACCESS_LOG=<file>.
+const logEnv = process.env.AIRSHOW_ACCESS_LOG;
+const accessLog =
+  logEnv === "off" || logEnv === "0" || logEnv === ""
+    ? undefined
+    : logEnv ?? path.resolve(here, "..", "..", "logs", "access.log");
+
+void startServer({ staticDir, tls, auth, accessLog });

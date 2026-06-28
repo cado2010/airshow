@@ -1,7 +1,8 @@
 # Starts the AirShow server over HTTPS on port 9443 using the Let's Encrypt cert.
 # Usage:  powershell -ExecutionPolicy Bypass -File .\serve-https.ps1  (or: npm run serve:https)
 $ErrorActionPreference = 'Stop'
-$root = $PSScriptRoot
+# This script lives in util-scripts/, so the repo root is its parent.
+$root = Split-Path -Parent $PSScriptRoot
 # Read the user-readable copies produced by install-cert.ps1 (certbot's own
 # files under letsencrypt\config\ are locked to SYSTEM/Administrators).
 $tls = Join-Path $root 'server\creds\tls'

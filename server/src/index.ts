@@ -9,6 +9,7 @@ import { outboundDispatcher } from "./providers.js";
 import { lookupRoute } from "./routes.js";
 import { lookupOpenSky, openSkyEnabled } from "./opensky.js";
 import { loginHandler, meHandler, requireAuth } from "./auth.js";
+import { createAccessLogger } from "./accesslog.js";
 import type { AircraftResponse } from "./types.js";
 
 const MAX_DIST_NM = 250;
@@ -22,6 +23,8 @@ export interface ServerOptions {
   tls?: { key: string; cert: string };
   /** Require a JWT (from /api/login) on every /api route except login/health. */
   auth?: boolean;
+  /** When set, append a JSON-lines access log (ts, WAN IP, user, ...) to this file. */
+  accessLog?: string;
 }
 
 export interface RunningServer {
@@ -50,6 +53,12 @@ export function createApp(opts: ServerOptions = {}): express.Express {
   const app = express();
   app.use(cors());
   app.use(express.json({ limit: "1mb" }));
+
+  // Access log (after body parsing so the login email is available, before the
+  // auth gate; it logs on response finish, by which point req.user is set).
+  if (opts.accessLog) {
+    app.use(createAccessLogger(opts.accessLog));
+  }
 
   // Auth gate: /api/login issues a JWT; everything else under /api requires it.
   // Public exceptions: /login, /health, /me (which checks the token itself).

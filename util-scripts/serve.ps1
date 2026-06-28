@@ -1,7 +1,8 @@
 # Starts the AirShow server over HTTP on port 9443, serving the built frontend.
 # Usage:  powershell -ExecutionPolicy Bypass -File .\serve.ps1   (or: npm run serve)
 $ErrorActionPreference = 'Stop'
-$root = $PSScriptRoot
+# This script lives in util-scripts/, so the repo root is its parent.
+$root = Split-Path -Parent $PSScriptRoot
 $env:PORT = '9443'
 $env:STATIC_DIR = Join-Path $root 'app\dist'
 Remove-Item Env:TLS_KEY_PATH  -ErrorAction SilentlyContinue
