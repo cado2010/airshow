@@ -300,6 +300,15 @@ export function ConfigPanel() {
       <label className="config-check">
         <input
           type="checkbox"
+          checked={config.mapOverlay}
+          onChange={(e) => update({ mapOverlay: e.target.checked })}
+        />
+        Map overlay (coastlines, borders, cities)
+      </label>
+
+      <label className="config-check">
+        <input
+          type="checkbox"
           checked={config.conflictEnabled}
           onChange={(e) => update({ conflictEnabled: e.target.checked })}
         />

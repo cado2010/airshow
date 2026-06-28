@@ -16,6 +16,7 @@
     "build": "npm -w server run build && npm -w app run build",
     "build:icon": "node scripts/make-icon.mjs",
     "fetch:airports": "node scripts/fetch-airports.mjs",
+    "fetch:mapdata": "node scripts/fetch-mapdata.mjs",
     "add-user": "powershell -NoProfile -ExecutionPolicy Bypass -File add-user.ps1",
     "set-password": "powershell -NoProfile -ExecutionPolicy Bypass -File set-password.ps1",
     "serve": "powershell -NoProfile -ExecutionPolicy Bypass -File serve.ps1",

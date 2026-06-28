@@ -13,6 +13,7 @@ import {
   loadLogoManifest,
 } from "../identity/airlines";
 import { airportsInView, airportsReady, loadAirports } from "../identity/airports";
+import { drawMapOverlay, loadMapData, mapReady } from "./mapOverlay";
 import { resolveRouteLine } from "../identity/routeResolve";
 import { intentFor } from "../identity/intent";
 import { ShowcaseController } from "../showcase/ShowcaseController";
@@ -339,8 +340,6 @@ export function CeilingCanvas() {
       const cx = vp.width / 2;
       const cy = vp.height / 2;
 
-      drawRadarOverlay(ctx, vp, radiusMiles, cx, cy, s);
-
       const mPerDegLon = M_PER_DEG_LAT * Math.cos((centerLat * Math.PI) / 180);
       const px = (_lat: number, lon: number): number =>
         cx + (lon - centerLon) * mPerDegLon * s;
@@ -350,6 +349,26 @@ export function CeilingCanvas() {
         x: px(lat, lon),
         y: py(lat, lon),
       });
+
+      // Faint map (coastlines/borders/cities) under the radar overlay + aircraft.
+      // Opt-in (off by default); the ~10MB dataset is lazy-loaded on first enable.
+      if (cfg.mapOverlay) {
+        if (!mapReady()) {
+          void loadMapData();
+        } else {
+          const dLat = vp.height / 2 / s / M_PER_DEG_LAT;
+          const dLon = vp.width / 2 / s / (mPerDegLon || 1);
+          drawMapOverlay(ctx, px, py, {
+            minLat: centerLat - dLat,
+            maxLat: centerLat + dLat,
+            minLon: centerLon - dLon,
+            maxLon: centerLon + dLon,
+            radiusMiles,
+          });
+        }
+      }
+
+      drawRadarOverlay(ctx, vp, radiusMiles, cx, cy, s);
 
       const tracks = tmRef.current.frame(now);
 

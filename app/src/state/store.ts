@@ -26,6 +26,7 @@ const DEFAULT_CONFIG: AirShowConfig = {
   conflictNearHorizNm: 0.5,
   conflictNearVertFt: 400,
   autoShowEnabled: false,
+  mapOverlay: false,
 };
 
 function loadConfig(): AirShowConfig {

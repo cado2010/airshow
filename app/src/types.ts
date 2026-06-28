@@ -49,4 +49,6 @@ export interface AirShowConfig {
   conflictNearVertFt: number;
   /** Auto-show mode: cycle a large flight card through aircraft (for projection). */
   autoShowEnabled: boolean;
+  /** Draw a faint gray map (coastlines, borders, city names) behind the aircraft. */
+  mapOverlay: boolean;
 }
